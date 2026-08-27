@@ -1,0 +1,18 @@
+import { proxyAuthenticatedAgentRequest } from '@/lib/agent-backend';
+
+export const dynamic = 'force-dynamic';
+
+export async function GET(request: Request): Promise<Response> {
+  const { search } = new URL(request.url);
+  const response = await proxyAuthenticatedAgentRequest(
+    request,
+    `/api/ad-diagnostics/history${search}`
+  );
+
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      'Content-Type': response.headers.get('Content-Type') ?? 'application/json'
+    }
+  });
+}

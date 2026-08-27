@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-amazon_ops}
+      POSTGRES_USER: ${POSTGRES_USER:-amazon_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-amazon_ops}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - amazon_ops_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-amazon_ops}:${POSTGRES_PASSWORD:-amazon_ops}@postgres:5432/${POSTGRES_DB:-amazon_ops}
+      IDEMPOTENCY_TTL_SECONDS: ${IDEMPOTENCY_TTL_SECONDS:-86400}
+      IDEMPOTENCY_DB_POOL_SIZE: ${IDEMPOTENCY_DB_POOL_SIZE:-10}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      SELLER_SPRITE_MCP_SECRET: ${SELLER_SPRITE_MCP_SECRET:-}
+      SIF_MCP_SECRET: ${SIF_MCP_SECRET:-}
+      LINGXING_MCP_URL: ${LINGXING_MCP_URL:-https://openmcp.lingxing.com/mcp-servers/lingxing-mcp}
+      LINGXING_MCP_SECRET: ${LINGXING_MCP_SECRET:-}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3001}
+      AUTH_DB_POOL_SIZE: ${AUTH_DB_POOL_SIZE:-10}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENT_API_BASE_URL: http://api:8000
+    ports:
+      - "3001:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  amazon_ops_postgres_data:

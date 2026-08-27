@@ -1,0 +1,80 @@
+name: amazon_ops
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - amazon_ops_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [amazon_ops_private]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      IDEMPOTENCY_TTL_SECONDS: ${IDEMPOTENCY_TTL_SECONDS:-86400}
+      IDEMPOTENCY_DB_POOL_SIZE: ${IDEMPOTENCY_DB_POOL_SIZE:-10}
+      AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE: ${AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE:-10}
+      AUTH_DB_POOL_SIZE: ${AUTH_DB_POOL_SIZE:-10}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      SELLER_SPRITE_MCP_SECRET: ${SELLER_SPRITE_MCP_SECRET:-}
+      SIF_MCP_SECRET: ${SIF_MCP_SECRET:-}
+      LINGXING_MCP_URL: ${LINGXING_MCP_URL:-https://openmcp.lingxing.com/mcp-servers/lingxing-mcp}
+      LINGXING_MCP_SECRET: ${LINGXING_MCP_SECRET}
+      APP_BASE_URL: ${APP_BASE_URL}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-amazon-ops-production}
+      LANGSMITH_WORKSPACE_ID: ${LANGSMITH_WORKSPACE_ID:-}
+      LANGSMITH_ENDPOINT: ${LANGSMITH_ENDPOINT:-https://api.smith.langchain.com}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [amazon_ops_private]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENT_API_BASE_URL: http://api:8000
+    ports:
+      - "127.0.0.1:${FRONTEND_BIND_PORT:-3001}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [amazon_ops_private]
+
+networks:
+  amazon_ops_private:
+    driver: bridge
+
+volumes:
+  amazon_ops_postgres_data:
+    name: amazon_ops_postgres_data
