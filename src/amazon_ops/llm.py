@@ -45,8 +45,12 @@ class DeepSeekConfig(BaseModel):
     @classmethod
     def from_env(cls, *, env_file: str | Path = ".env") -> "DeepSeekConfig":
         load_dotenv(env_file, override=False)
+        # Some managed hosts retain variables entered as an empty string. Treat
+        # an empty optional override the same as an unset value so the API can
+        # still boot and expose its health endpoint.
+        base_url = os.getenv("DEEPSEEK_BASE_URL", "").strip().rstrip("/")
         return cls(
-            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
+            base_url=base_url or "https://api.deepseek.com",
             model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         )
 

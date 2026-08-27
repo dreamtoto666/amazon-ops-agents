@@ -16,6 +16,14 @@ from amazon_ops.listing import DeepSeekListingCopywriter, ListingDraft
 from amazon_ops.models import FinalResponse, UnderstandRequestResult
 
 
+def test_deepseek_config_uses_default_url_when_host_sets_empty_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "")
+
+    config = DeepSeekConfig.from_env(env_file=tmp_path / "missing.env")
+
+    assert config.base_url == "https://api.deepseek.com"
+
+
 def test_deepseek_client_requests_current_model_and_validates_json_output():
     captured = {}
 
