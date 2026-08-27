@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Extract an uploaded release, retain its secrets separately, and promote it only after health checks pass.
-ARCHIVE_PATH="${1:?用法：install-release.sh /path/to/amazon-ops-release.tar.gz}"
+ARCHIVE_PATH="${1:?用法：install-release.sh /path/to/amazon-ops-release.tar.gz /path/to/amazon-ops-images.tar.gz}"
+IMAGE_ARCHIVE_PATH="${2:?请提供本机构建的镜像包路径}"
 APP_ROOT="${APP_ROOT:-/opt/amazon-ops}"
 ENV_FILE="$APP_ROOT/shared/.env"
 
@@ -12,6 +13,7 @@ fail() {
 }
 
 [[ -f "$ARCHIVE_PATH" ]] || fail "找不到发布包：$ARCHIVE_PATH"
+[[ -f "$IMAGE_ARCHIVE_PATH" ]] || fail "找不到本机镜像包：$IMAGE_ARCHIVE_PATH"
 [[ -f "$ENV_FILE" ]] || fail "请先创建 $ENV_FILE"
 
 release_id="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -27,8 +29,14 @@ tar -xzf "$ARCHIVE_PATH" -C "$release_dir" 2>/dev/null || {
   rm -rf "$release_dir"
   fail "发布包不包含生产部署脚本"
 }
+[[ -f "$release_dir/.image-release.env" ]] || {
+  rm -rf "$release_dir"
+  fail "发布包不包含本机镜像清单"
+}
 
-if "$release_dir/scripts/production/deploy-server.sh" "$ENV_FILE"; then
+gzip -dc "$IMAGE_ARCHIVE_PATH" | docker load
+
+if "$release_dir/scripts/production/deploy-server.sh" "$ENV_FILE" "$release_dir/.image-release.env"; then
   ln -sfn "$release_dir" "$APP_ROOT/current"
   printf '已切换当前版本至 %s\n' "$release_id"
 else

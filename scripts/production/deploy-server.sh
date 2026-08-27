@@ -4,6 +4,7 @@ set -euo pipefail
 # Run from an extracted release directory. Secrets live outside the release tree.
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ENV_FILE="${1:-/opt/amazon-ops/shared/.env}"
+IMAGE_ENV_FILE="${2:-$PROJECT_DIR/.image-release.env}"
 COMPOSE_FILE="$PROJECT_DIR/docker-compose.prod.yml"
 
 fail() {
@@ -12,11 +13,13 @@ fail() {
 }
 
 [[ -f "$ENV_FILE" ]] || fail "找不到生产环境文件：$ENV_FILE"
+[[ -f "$IMAGE_ENV_FILE" ]] || fail "找不到本机镜像清单：$IMAGE_ENV_FILE"
 [[ -f "$COMPOSE_FILE" ]] || fail "找不到生产 Compose 文件。"
 
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
+. "$IMAGE_ENV_FILE"
 set +a
 
 required_vars=(APP_DOMAIN APP_BASE_URL POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD DEEPSEEK_API_KEY LINGXING_MCP_SECRET)
@@ -30,10 +33,14 @@ done
 [[ "$APP_BASE_URL" == "https://$APP_DOMAIN" ]] || fail "APP_BASE_URL 必须为 https://$APP_DOMAIN"
 [[ ${#POSTGRES_PASSWORD} -ge 24 ]] || fail "POSTGRES_PASSWORD 至少需要 24 个字符"
 [[ "$POSTGRES_PASSWORD" =~ ^[A-Za-z0-9._-]+$ ]] || fail "POSTGRES_PASSWORD 仅允许字母、数字、点、下划线和连字符"
+[[ "${AMAZON_OPS_API_IMAGE:-}" =~ ^amazon-ops-api:[A-Za-z0-9._-]+$ ]] || fail "镜像清单中的 API 镜像名称无效"
+[[ "${AMAZON_OPS_FRONTEND_IMAGE:-}" =~ ^amazon-ops-frontend:[A-Za-z0-9._-]+$ ]] || fail "镜像清单中的前端镜像名称无效"
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config --quiet
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --remove-orphans
+docker image inspect "$AMAZON_OPS_API_IMAGE" >/dev/null || fail "服务器未加载 API 镜像：$AMAZON_OPS_API_IMAGE"
+docker image inspect "$AMAZON_OPS_FRONTEND_IMAGE" >/dev/null || fail "服务器未加载前端镜像：$AMAZON_OPS_FRONTEND_IMAGE"
+
+docker compose --env-file "$ENV_FILE" --env-file "$IMAGE_ENV_FILE" -f "$COMPOSE_FILE" config --quiet
+docker compose --env-file "$ENV_FILE" --env-file "$IMAGE_ENV_FILE" -f "$COMPOSE_FILE" up -d --remove-orphans
 
 frontend_port="${FRONTEND_BIND_PORT:-3001}"
 for attempt in $(seq 1 30); do
@@ -44,5 +51,5 @@ for attempt in $(seq 1 30); do
   sleep 2
 done
 
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps >&2
+docker compose --env-file "$ENV_FILE" --env-file "$IMAGE_ENV_FILE" -f "$COMPOSE_FILE" ps >&2
 fail "前端健康检查在 60 秒内未通过；旧数据卷和环境文件均未删除。"

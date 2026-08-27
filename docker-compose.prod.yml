@@ -18,9 +18,7 @@ services:
     networks: [amazon_ops_private]
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${AMAZON_OPS_API_IMAGE:?请使用本机镜像发布包部署}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -58,9 +56,7 @@ services:
     networks: [amazon_ops_private]
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ${AMAZON_OPS_FRONTEND_IMAGE:?请使用本机镜像发布包部署}
     restart: unless-stopped
     environment:
       AGENT_API_BASE_URL: http://api:8000

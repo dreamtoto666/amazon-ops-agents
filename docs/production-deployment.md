@@ -27,14 +27,14 @@ BFF 调用 API，因此不需要也不得公开 API 或数据库端口。
    sudo install -d -m 750 -o "$USER" -g "$USER" /opt/amazon-ops/{releases,shared,backups}
    ```
 
-2. 在本地生成代码发布包并上传。发布包不包含 `.env`、依赖目录、构建产物或 Git 元数据：
+2. 在本地为服务器构建镜像并上传两个发布包。此步骤在本机完成，服务器不会执行前端或 API 构建，特别适合小内存实例。脚本强制生成 `linux/amd64` 镜像，以兼容阿里云 Ubuntu 服务器：
 
-   ```bash
-   ./scripts/production/create-release.sh
-   scp dist/amazon-ops-release-*.tar.gz deploy@server:/tmp/
-   ```
+  ```bash
+   ./scripts/production/create-image-release.sh
+   scp dist/amazon-ops-release-*.tar.gz dist/amazon-ops-images-*.tar.gz deploy@server:/tmp/
+  ```
 
-3. 在服务器解压发布包，创建仅服务器保存的环境文件，再构建并启动。健康检查失败时，发布脚本不会
+3. 在服务器解压发布包，创建仅服务器保存的环境文件，加载本机构建的镜像并启动。健康检查失败时，发布脚本不会
    删除数据卷、服务器环境文件或原当前版本：
 
    ```bash
@@ -43,7 +43,9 @@ BFF 调用 API，因此不需要也不得公开 API 或数据库端口。
    cp /tmp/amazon-ops-bootstrap/.env.production.example /opt/amazon-ops/shared/.env
    chmod 600 /opt/amazon-ops/shared/.env
    editor /opt/amazon-ops/shared/.env
-   /tmp/amazon-ops-bootstrap/scripts/production/install-release.sh /tmp/amazon-ops-release-*.tar.gz
+   /tmp/amazon-ops-bootstrap/scripts/production/install-release.sh \
+     /tmp/amazon-ops-release-*.tar.gz \
+     /tmp/amazon-ops-images-*.tar.gz
    ```
 
    脚本会将版本放入 `/opt/amazon-ops/releases/`，成功后更新
@@ -79,7 +81,7 @@ sudo ss -ltnp | grep -E ':(3001|8000|5432)'
 ```
 
 最后一条中，`3001` 必须只绑定 `127.0.0.1`；`8000` 和 `5432` 不应出现监听。登录后创建一个最小
-Agent 运行，确认页面收到 SSE 阶段更新。后续更新重复“生成发布包 → 上传 → 运行
+Agent 运行，确认页面收到 SSE 阶段更新。后续更新重复“本机构建镜像和发布包 → 上传两个压缩包 → 运行
 `install-release.sh`”；数据库卷和共享 `.env` 不会被替换。
 
 ## 备份与恢复
