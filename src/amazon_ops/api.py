@@ -28,6 +28,7 @@ from .idempotency import (
     IdempotencyKeyError,
     IdempotencyRegistry,
     IdempotencyStorageError,
+    InMemoryIdempotencyRegistry,
     PostgresIdempotencyRegistry,
     request_fingerprint,
 )
@@ -46,7 +47,7 @@ from .advertising import (
     AdvertisingRunManager,
     AdvertisingRunRecord,
 )
-from .advertising.history import PostgresAdvertisingRunHistoryStore
+from .advertising.history import InMemoryAdvertisingRunHistoryStore, PostgresAdvertisingRunHistoryStore
 from .sse import SSE_RESPONSE_HEADERS, stage_sse_stream
 from .auth import AuthStore, AuthUser, bearer_token, require_admin, require_user
 
@@ -66,6 +67,12 @@ def _env_int(name: str, default: int) -> int:
 
 def _env_float(name: str, default: float) -> float:
     return float(_env_text(name, str(default)))
+
+
+def _uses_serverless_test_storage() -> bool:
+    """Vercel functions have no colocated PostgreSQL service or durable disk."""
+
+    return os.getenv("VERCEL") == "1"
 
 
 class CreateRunRequest(BaseModel):
@@ -320,18 +327,27 @@ def create_app(
 ) -> FastAPI:
     runtime = manager or AgentRunManager()
     shared_llm = getattr(getattr(runtime, "roles", None), "llm", None)
+    serverless_test_storage = _uses_serverless_test_storage()
     database_url = _env_text("DATABASE_URL", DEFAULT_DATABASE_URL)
     advertising_runtime = advertising_manager or AdvertisingRunManager(
         llm=shared_llm,
-        history_store=PostgresAdvertisingRunHistoryStore(
-            database_url,
-            max_pool_size=_env_int("AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE", 10),
+        history_store=(
+            InMemoryAdvertisingRunHistoryStore()
+            if serverless_test_storage
+            else PostgresAdvertisingRunHistoryStore(
+                database_url,
+                max_pool_size=_env_int("AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE", 10),
+            )
         ),
     )
-    idempotency = idempotency_registry or PostgresIdempotencyRegistry(
-        database_url,
-        ttl_seconds=_env_float("IDEMPOTENCY_TTL_SECONDS", 86400),
-        max_pool_size=_env_int("IDEMPOTENCY_DB_POOL_SIZE", 10),
+    idempotency = idempotency_registry or (
+        InMemoryIdempotencyRegistry()
+        if serverless_test_storage
+        else PostgresIdempotencyRegistry(
+            database_url,
+            ttl_seconds=_env_float("IDEMPOTENCY_TTL_SECONDS", 86400),
+            max_pool_size=_env_int("IDEMPOTENCY_DB_POOL_SIZE", 10),
+        )
     )
     auth = auth_store or AuthStore(
         database_url, max_pool_size=_env_int("AUTH_DB_POOL_SIZE", 10)
@@ -342,7 +358,7 @@ def create_app(
     app.state.idempotency_registry = idempotency
     app.state.auth_store = auth
     start_advertising_recovery = getattr(advertising_runtime, "start_recovery_monitor", None)
-    if callable(start_advertising_recovery):
+    if callable(start_advertising_recovery) and not serverless_test_storage:
         # Durable tasks retain their original identifiers; recovery only claims
         # stale records protected by the database lease.
         app.router.add_event_handler("startup", start_advertising_recovery)

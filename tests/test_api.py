@@ -72,6 +72,15 @@ def test_empty_host_environment_overrides_use_safe_defaults(monkeypatch):
     assert _env_int("AUTH_DB_POOL_SIZE", 10) == 10
 
 
+def test_vercel_uses_ephemeral_storage_for_backend_smoke_test(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+
+    app = create_app(manager=StubRunManager(), auth_store=StubAuthStore())
+
+    assert app.state.idempotency_registry.health() == {"backend": "memory", "status": "ok"}
+    assert app.state.advertising_run_manager.history_store.__class__.__name__ == "InMemoryAdvertisingRunHistoryStore"
+
+
 def test_api_exposes_real_configuration_status_and_creates_run():
     manager = StubRunManager()
     client = create_test_client(manager)
