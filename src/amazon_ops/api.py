@@ -51,6 +51,23 @@ from .sse import SSE_RESPONSE_HEADERS, stage_sse_stream
 from .auth import AuthStore, AuthUser, bearer_token, require_admin, require_user
 
 
+DEFAULT_DATABASE_URL = "postgresql://amazon_ops:amazon_ops@127.0.0.1:5432/amazon_ops"
+
+
+def _env_text(name: str, default: str) -> str:
+    """Return the default for empty values entered in managed-host UIs."""
+
+    return os.getenv(name, "").strip() or default
+
+
+def _env_int(name: str, default: int) -> int:
+    return int(_env_text(name, str(default)))
+
+
+def _env_float(name: str, default: float) -> float:
+    return float(_env_text(name, str(default)))
+
+
 class CreateRunRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
     conversation_id: str = Field(
@@ -303,24 +320,21 @@ def create_app(
 ) -> FastAPI:
     runtime = manager or AgentRunManager()
     shared_llm = getattr(getattr(runtime, "roles", None), "llm", None)
-    database_url = os.getenv(
-        "DATABASE_URL",
-        "postgresql://amazon_ops:amazon_ops@127.0.0.1:5432/amazon_ops",
-    )
+    database_url = _env_text("DATABASE_URL", DEFAULT_DATABASE_URL)
     advertising_runtime = advertising_manager or AdvertisingRunManager(
         llm=shared_llm,
         history_store=PostgresAdvertisingRunHistoryStore(
             database_url,
-            max_pool_size=int(os.getenv("AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE", "10")),
+            max_pool_size=_env_int("AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE", 10),
         ),
     )
     idempotency = idempotency_registry or PostgresIdempotencyRegistry(
         database_url,
-        ttl_seconds=float(os.getenv("IDEMPOTENCY_TTL_SECONDS", "86400")),
-        max_pool_size=int(os.getenv("IDEMPOTENCY_DB_POOL_SIZE", "10")),
+        ttl_seconds=_env_float("IDEMPOTENCY_TTL_SECONDS", 86400),
+        max_pool_size=_env_int("IDEMPOTENCY_DB_POOL_SIZE", 10),
     )
     auth = auth_store or AuthStore(
-        database_url, max_pool_size=int(os.getenv("AUTH_DB_POOL_SIZE", "10"))
+        database_url, max_pool_size=_env_int("AUTH_DB_POOL_SIZE", 10)
     )
     app = FastAPI(title="Amazon Ops Agent API", version="0.1.0")
     app.state.run_manager = runtime
@@ -638,6 +652,6 @@ def main() -> None:
     uvicorn.run(
         "amazon_ops.api:app",
         host=os.getenv("AMAZON_OPS_API_HOST", "127.0.0.1"),
-        port=int(os.getenv("AMAZON_OPS_API_PORT", "8000")),
+        port=_env_int("AMAZON_OPS_API_PORT", 8000),
         reload=False,
     )

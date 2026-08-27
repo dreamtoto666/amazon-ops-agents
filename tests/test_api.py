@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from amazon_ops.api import create_app
+from amazon_ops.api import DEFAULT_DATABASE_URL, _env_float, _env_int, _env_text, create_app
 from amazon_ops.auth import AuthUser
 from amazon_ops.auth import normalize_username
 from amazon_ops.idempotency import InMemoryIdempotencyRegistry
@@ -60,6 +60,16 @@ def create_test_client(manager: StubRunManager) -> TestClient:
         )
         , headers={"Authorization": "Bearer test-token"}
     )
+
+
+def test_empty_host_environment_overrides_use_safe_defaults(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("IDEMPOTENCY_TTL_SECONDS", "")
+    monkeypatch.setenv("AUTH_DB_POOL_SIZE", "")
+
+    assert _env_text("DATABASE_URL", DEFAULT_DATABASE_URL) == DEFAULT_DATABASE_URL
+    assert _env_float("IDEMPOTENCY_TTL_SECONDS", 86400) == 86400
+    assert _env_int("AUTH_DB_POOL_SIZE", 10) == 10
 
 
 def test_api_exposes_real_configuration_status_and_creates_run():
