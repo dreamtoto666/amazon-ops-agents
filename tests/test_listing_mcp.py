@@ -52,6 +52,12 @@ def test_lingxing_config_uses_streamable_http_header_without_exposing_key():
     assert "put_campaigns" not in payload["allowed_tools"]
 
 
+def test_lingxing_config_uses_default_endpoint_when_override_is_empty(monkeypatch):
+    monkeypatch.setenv("LINGXING_MCP_URL", "")
+
+    assert lingxing_mcp_config().endpoint == "https://openmcp.lingxing.com/mcp-servers/lingxing-mcp"
+
+
 def test_discovery_only_exposes_allowlisted_tools():
     transport = FakeTransport()
     client = MCPProviderClient(config=seller_sprite_mcp_config(), transport=transport)

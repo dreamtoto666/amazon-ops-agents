@@ -208,12 +208,10 @@ def sif_mcp_config(*, auth_header: str = "secret-key") -> MCPServerConfig:
 def lingxing_mcp_config() -> MCPServerConfig:
     """Build a LingXing MCP connection restricted to read-only tools."""
 
+    endpoint = os.getenv("LINGXING_MCP_URL", "").strip()
     return MCPServerConfig(
         provider=MCPProvider.LINGXING,
-        endpoint=os.getenv(
-            "LINGXING_MCP_URL",
-            "https://openmcp.lingxing.com/mcp-servers/lingxing-mcp",
-        ),
+        endpoint=endpoint or "https://openmcp.lingxing.com/mcp-servers/lingxing-mcp",
         api_key_env="LINGXING_MCP_SECRET",
         auth_header="X-Mcp-Key",
         max_concurrency=1,
