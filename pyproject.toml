@@ -32,3 +32,7 @@ packages = ["src/amazon_ops"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+# Vercel Python runtime entrypoint for the FastAPI backend test deployment.
+[tool.vercel]
+entrypoint = "src.amazon_ops.api:app"
