@@ -18,6 +18,7 @@
 - [Listing MCP 接入接口](docs/listing-mcp-integration.md)
 - [DeepSeek 统一 LLM 接入](docs/deepseek-integration.md)
 - [广告异常诊断与运营代办多 Agent 设计](docs/advertising-anomaly-multi-agent-design.md)
+- [报关单填写自动化](docs/customs-declaration-automation.md)
 - [任务创建幂等键](docs/idempotency.md)
 
 ## 本地验证
@@ -33,7 +34,9 @@ uv run pytest
 docker compose up --build -d
 ```
 
-Docker Compose 会启动 PostgreSQL、Agent API 和前端。任务创建幂等记录保存在 PostgreSQL 数据卷中，API 重启后仍可重放。详细规则见[任务创建幂等键](docs/idempotency.md)。
+Docker Compose 会启动 PostgreSQL、Agent API 和前端。任务创建幂等记录及运营助手会话记忆都保存在 PostgreSQL 数据卷中，API 重启后仍可继续同一会话。详细规则见[任务创建幂等键](docs/idempotency.md)。
+
+已导入广告报表的只读查询也可作为内部 MCP 工具运行。使用 `./scripts/start-nl2sql-mcp.sh` 启动 stdio Server；它查询团队共享的广告数据，仍要求 `DATABASE_READONLY_URL`。
 
 生产服务器部署请使用 [生产部署指南](docs/production-deployment.md)。该方案通过 Nginx + Certbot
 提供 HTTPS；PostgreSQL 和 API 不开放公网端口，发布包不包含密钥。
@@ -48,6 +51,8 @@ Docker Compose 会启动 PostgreSQL、Agent API 和前端。任务创建幂等�
 前端通过同源代理创建真实 LangGraph 任务并订阅阶段 SSE，不再使用模拟任务数据。
 如果 `.env` 中没有 `DEEPSEEK_API_KEY`，页面会显示真实未配置状态，不会生成假结果。
 
+广告异常诊断的核心报表可配置领星 Open API：在本机 `.env` 填写 `LINGXING_OPEN_API_BASE_URL`、`LINGXING_OPEN_API_APP_ID` 和 `LINGXING_OPEN_API_APP_SECRET`。负责人、店铺和父 ASIN 的选择目录由内部 MCP 的固定只读白名单获取，不能通过环境变量替换上游工具。这些凭证不得提交或粘贴到聊天、日志和文档中。
+
 启用模型前，在 `.env` 中填写 `DEEPSEEK_API_KEY`。总控请求理解、总控结果汇总和
 Listing 文案角色共享同一个 DeepSeek 客户端，默认模型为 `deepseek-v4-flash`。
 
@@ -55,6 +60,7 @@ Listing 文案角色共享同一个 DeepSeek 客户端，默认模型为 `deepse
 
 ```text
 src/amazon_ops/
+├── customs_declaration/ # 确定性报关解析、商品目录与OOXML模板生成
 ├── listing/       # Listing Agent、MCP Transport、关键词证据网关与条件边子图
 ├── llm.py         # DeepSeek 共享客户端、JSON 输出与错误边界
 ├── deepseek_runtime.py # 总控和专业 Agent 的统一模型角色组装

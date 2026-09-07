@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -17,8 +18,9 @@ from amazon_ops.listing.mcp import mcp_trace_context
 from .agents import (
     ApprovalRequiredReviewTodoAgent,
 )
-from .gateway import AdvertisingDataGateway, AdvertisingReport, LingxingAdvertisingGateway
-from amazon_ops.listing.mcp import MCPToolResult
+from .gateway import AdvertisingDataGateway, AdvertisingReport, LingxingOpenAPIAdvertisingGateway
+from .selection_gateway import SelectionDirectoryGateway
+from amazon_ops.listing.mcp import MCPGatewayError, MCPToolResult
 from .graph import AdvertisingDiagnosticServices, build_advertising_diagnostic_graph
 from .history import AdvertisingRunHistoryStore, InMemoryAdvertisingRunHistoryStore
 from .llm_agents import (
@@ -37,6 +39,49 @@ from .models import (
 )
 
 
+@dataclass(frozen=True)
+class ResolvedExecutionScope:
+    """Private query-only scope. Never serialize this object or pass it to an Agent."""
+    sid: str
+    child_asins: tuple[str, ...]
+    campaign_ids: tuple[str, ...]
+    parent_asins: tuple[str, ...] = ()
+    shop_label: str = ""
+
+
+class _ScopedAdvertisingGateway:
+    """Enforces a private store/product scope while exposing only campaign data."""
+    def __init__(self, delegate: AdvertisingDataGateway, scope: ResolvedExecutionScope) -> None:
+        self.delegate, self.scope = delegate, scope
+
+    def campaign_report(self, *, profile_ids=None, period, campaign_ids=None, asins=None):
+        requested = set(campaign_ids or self.scope.campaign_ids)
+        allowed = set(self.scope.campaign_ids)
+        report = self.delegate.campaign_report(profile_ids=[self.scope.sid], period=period, campaign_ids=sorted(requested & allowed))
+        return self._safe_report(report)
+
+    def attribution_report(self, *, tool, profile_ids=None, period, campaign_ids):
+        allowed = set(self.scope.campaign_ids)
+        report = self.delegate.attribution_report(tool=tool, profile_ids=[self.scope.sid], period=period, campaign_ids=sorted(set(campaign_ids) & allowed))
+        return self._safe_report(report)
+
+    def _safe_report(self, report: AdvertisingReport) -> AdvertisingReport:
+        safe_rows = []
+        for source in report.rows:
+            row = {key: value for key, value in source.items() if key not in {"asin", "sku", "sid", "profile_id", "name"}}
+            # Models require a profile value but the real shop ID is not an
+            # Agent fact. Campaign ID remains the sole business identifier.
+            row["profile_id"] = "scoped-store"
+            if row.get("campaign_id") is not None:
+                row["name"] = f"Campaign {row['campaign_id']}"
+            safe_rows.append(row)
+        safe_arguments = {"product_scope_applied": True, "campaign_count": len(self.scope.campaign_ids)}
+        return AdvertisingReport(
+            tool=report.tool, arguments=safe_arguments, rows=safe_rows, total=len(safe_rows),
+            trace=report.trace.model_copy(update={"arguments": safe_arguments}),
+        )
+
+
 class AdvertisingRunRecord(BaseModel):
     run_id: str
     trace_id: str
@@ -51,6 +96,8 @@ class AdvertisingRunRecord(BaseModel):
     last_heartbeat_at: datetime | None = None
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
+    # Human-facing history metadata only. It is never copied into graph state.
+    display_scope: dict[str, Any] | None = None
 
 
 class _LedgerGateway:
@@ -216,11 +263,13 @@ class AdvertisingRunManager:
         self,
         *,
         gateway: AdvertisingDataGateway | None = None,
+        selection_gateway: SelectionDirectoryGateway | None = None,
         llm: StructuredLLM | None = None,
         history_store: AdvertisingRunHistoryStore | None = None,
         max_workers: int = 2,
     ) -> None:
-        self.gateway = gateway or LingxingAdvertisingGateway()
+        self.gateway = gateway or LingxingOpenAPIAdvertisingGateway()
+        self.selection_gateway = selection_gateway or SelectionDirectoryGateway()
         self.llm = llm or build_deepseek_llm()
         self.history_store = history_store or InMemoryAdvertisingRunHistoryStore()
         self.hub = InMemoryEventHub()
@@ -230,13 +279,57 @@ class AdvertisingRunManager:
         self._lock = RLock()
         self._runs: dict[str, AdvertisingRunRecord] = {}
         self._owners: dict[str, str | None] = {}
+        self._execution_scopes: dict[str, ResolvedExecutionScope] = {}
         self._recovery_stop = Event()
         self._recovery_thread: Thread | None = None
 
     def list_shops(self) -> list[AdShop]:
         return self.gateway.list_shops()
 
-    def submit(self, request: AdDiagnosticRequest, *, owner_id: str | None = None) -> str:
+    def selection_directory(self, *, owner_id: str | None = None) -> dict[str, Any]:
+        """Human-facing directory; deliberately never passed to the graph."""
+        directory = self.selection_gateway.directory(owner_id=owner_id)
+        # A product may exist in the Listing directory while its shop has not
+        # been authorized for advertising.  Such a selection can never be
+        # resolved into a product-scoped SB range, so do not offer it in the
+        # workbench in the first place.
+        authorized_labels = getattr(self.gateway, "authorized_advertising_shop_labels", None)
+        if not callable(authorized_labels):
+            return directory
+        allowed = authorized_labels()
+        return {
+            **directory,
+            "stores": [
+                store for store in directory.get("stores", [])
+                if store.get("label") in allowed
+            ],
+        }
+
+    def resolve_selection(self, request: AdDiagnosticRequest, *, owner_id: str | None) -> tuple[AdDiagnosticRequest, ResolvedExecutionScope | None]:
+        """Resolve human-only refs before building graph state or durable history."""
+        if not request.selection_version:
+            # Legacy non-selector callers stay compatible. The new workbench
+            # always uses the private-scope branch below.
+            return request, None
+        scope = self.selection_gateway.resolve(
+            owner_id=owner_id,
+            version=request.selection_version,
+            shop_ref=request.shop_ref or "",
+            product_refs=request.product_refs,
+        )
+        campaign_ids = self._resolve_campaign_ids(
+            scope.sid,
+            scope.child_asins,
+            request.current_period,
+            shop_label=scope.shop_label,
+        )
+        if not campaign_ids:
+            raise ValueError("所选产品在当前周期未映射到 SP、SB 或 SD 广告商品报表；请确认该周期有广告消耗，或调整诊断周期。")
+        return self._sanitize_request(request.model_copy(update={"campaign_ids": sorted(campaign_ids)})), ResolvedExecutionScope(
+            sid=scope.sid, child_asins=tuple(scope.child_asins), campaign_ids=tuple(sorted(campaign_ids)), parent_asins=tuple(scope.parent_asins), shop_label=scope.shop_label,
+        )
+
+    def submit(self, request: AdDiagnosticRequest, *, owner_id: str | None = None, execution_scope: ResolvedExecutionScope | None = None) -> str:
         run_id = f"ad-run-{uuid4().hex}"
         trace_id = f"trace-{uuid4().hex}"
         root_span_id = f"span-{uuid4().hex}"
@@ -248,12 +341,73 @@ class AdvertisingRunManager:
                 stage="queued",
                 status="running",
                 last_heartbeat_at=datetime.now(timezone.utc),
+                display_scope=(
+                    {
+                        "shop_label": execution_scope.shop_label,
+                        "campaign_count": len(execution_scope.campaign_ids),
+                        "current_period": request.current_period.model_dump(mode="json"),
+                    }
+                    if execution_scope else None
+                ),
             )
             self._runs[run_id] = record
             self._owners[run_id] = owner_id
+            if execution_scope and execution_scope.sid:
+                self._execution_scopes[run_id] = execution_scope
         self.history_store.save(record.model_dump(mode="json"), request.model_dump(mode="json"), owner_id)
         self._executor.submit(self._execute, run_id, trace_id, root_span_id, request, None, None)
         return run_id
+
+    def _resolve_campaign_ids(
+        self,
+        sid: str,
+        child_asins: list[str],
+        period,
+        *,
+        shop_label: str | None = None,
+    ) -> set[str]:
+        resolver = getattr(self.gateway, "resolve_campaign_ids", None)
+        if callable(resolver):
+            try:
+                try:
+                    return set(
+                        resolver(
+                            sid=sid,
+                            asins=child_asins,
+                            period=period,
+                            shop_label=shop_label,
+                        )
+                    )
+                except TypeError as exc:
+                    if "shop_label" not in str(exc):
+                        raise
+                    return set(resolver(sid=sid, asins=child_asins, period=period))
+            except MCPGatewayError as exc:
+                # The SB product resolver is intentionally mandatory for a
+                # product-scoped run.  Do not silently substitute a whole-shop
+                # SB report when its private MCP query is unavailable.
+                if exc.code == "MCP_INVALID_ARGUMENTS":
+                    raise ValueError(
+                        "SB 产品范围查询被领星 MCP 拒绝：工具端报告存在未填写的必填字段。"
+                        "请联系领星确认 ad_auth_shops 或 ad_campaign_report 的实际参数要求。"
+                    ) from exc
+                raise ValueError(
+                    "SB 活动范围查询暂不可用，请确认领星 MCP 已开通 "
+                    "ad_auth_shops 和 ad_campaign_report 的只读权限，"
+                    "并确认所选店铺已出现在广告授权店铺列表中。"
+                ) from exc
+        resolver = getattr(self.gateway, "_campaigns_for_asins", None)
+        if callable(resolver):
+            return set(resolver([sid], period, child_asins))
+        raise ValueError("当前广告数据源无法解析所选产品的广告活动范围。")
+
+    @staticmethod
+    def _sanitize_request(request: AdDiagnosticRequest) -> AdDiagnosticRequest:
+        """The only request copied to graph state, history and LLM context."""
+        return request.model_copy(update={
+            "profile_ids": [], "asins": [], "scope": None,
+            "selection_version": None, "shop_ref": None, "product_refs": [],
+        })
 
     def get(self, run_id: str, *, owner_id: str | None = None) -> AdvertisingRunRecord | None:
         with self._lock:
@@ -322,7 +476,9 @@ class AdvertisingRunManager:
                 ],
             },
         )
-        ledger_gateway = _LedgerGateway(self.gateway, self, run_id, state)
+        private_scope = self._execution_scopes.get(run_id)
+        gateway = _ScopedAdvertisingGateway(self.gateway, private_scope) if private_scope else self.gateway
+        ledger_gateway = _LedgerGateway(gateway, self, run_id, state)
         services = AdvertisingDiagnosticServices(
             inspector=_EventedInspector(DeepSeekDataInspectionAgent(ledger_gateway, self.llm), self, run_id),
             attribution=_EventedAttribution(
@@ -334,6 +490,8 @@ class AdvertisingRunManager:
             reviewer=_EventedReviewer(ApprovalRequiredReviewTodoAgent(), self, run_id),
             checkpoint=lambda current, key, update: self._checkpoint(run_id, request, current, key, update, lease_owner),
         )
+        with self._lock:
+            display_scope = self._runs.get(run_id).display_scope if self._runs.get(run_id) else None
         try:
             graph = build_advertising_diagnostic_graph(services=services)
             with mcp_trace_context(run_id=run_id, trace_id=trace_id):
@@ -361,6 +519,7 @@ class AdvertisingRunManager:
                 status="completed",
                 result=result,
                 detail_call_quotas=output.get("detail_call_quotas", []),
+                display_scope=display_scope,
             )
             self.hub.emit(
                 run_id,
@@ -382,6 +541,7 @@ class AdvertisingRunManager:
                     "code": getattr(exc, "code", "AD_DIAGNOSTIC_FAILED"),
                     "message": message,
                 },
+                display_scope=display_scope,
             )
             self.hub.emit(
                 run_id,
@@ -523,6 +683,12 @@ class AdvertisingRunManager:
         code = getattr(exc, "code", None)
         if code == "MCP_SECRET_MISSING":
             return "领星 MCP 密钥尚未配置。"
+        if code == "MCP_AUTH_FAILED":
+            return "领星 MCP 密钥无效或已失效，请更新后重试。"
+        if code in {"MCP_TOOL_UNAVAILABLE", "MCP_CATALOG_VERSION_STALE"}:
+            return "领星 MCP 未提供所需的广告数据接口，请稍后重试或联系管理员。"
+        if code == "MCP_RATE_LIMITED":
+            return "领星 MCP 请求过于频繁，请稍后重试。"
         if code in {"MCP_TRANSPORT_FAILURE", "MCP_TEMPORARY_FAILURE"}:
             return "领星 MCP 暂时无法连接，请稍后重试。"
         if code in {"MCP_TOOL_CALL_FAILED", "MCP_GATEWAY_ERROR"}:
@@ -541,4 +707,9 @@ class AdvertisingRunManager:
             return "DeepSeek 返回的广告结论未通过证据校验。"
         if isinstance(exc, RuntimeError) and str(exc).startswith("领星"):
             return str(exc)
+        if isinstance(exc, RuntimeError) and (
+            "广告巡检服务正在重启" in str(exc)
+            or "interpreter shutdown" in str(exc)
+        ):
+            return "广告巡检服务正在重启，请稍后重新发起查询。"
         return "广告巡检运行失败，请查看服务端日志。"

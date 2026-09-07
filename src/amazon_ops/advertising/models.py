@@ -7,6 +7,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+class DiagnosticScope(BaseModel):
+    """Resolved, identity-free scope that is safe for history and Agent State."""
+    shop_ref: str
+    product_refs: list[str] = Field(min_length=1)
+    sid: str
+    shop_label: str
+    parent_asins: list[str] = Field(min_length=1)
+    child_asins: list[str] = Field(min_length=1)
+
+
 class AdEntityType(str, Enum):
     PORTFOLIO = "portfolio"
     CAMPAIGN = "campaign"
@@ -68,7 +78,11 @@ class DiagnosticThresholds(BaseModel):
 
 
 class AdDiagnosticRequest(BaseModel):
-    profile_ids: list[str] = Field(min_length=1, max_length=50)
+    profile_ids: list[str] = Field(default_factory=list, max_length=50)
+    selection_version: str | None = None
+    shop_ref: str | None = None
+    product_refs: list[str] = Field(default_factory=list, max_length=50)
+    scope: DiagnosticScope | None = None
     current_period: DiagnosticPeriod
     baseline_period: DiagnosticPeriod | None = None
     timezone: str = "Asia/Shanghai"
@@ -80,6 +94,15 @@ class AdDiagnosticRequest(BaseModel):
     thresholds: DiagnosticThresholds = Field(default_factory=DiagnosticThresholds)
     trigger: Literal["manual", "scheduled"] = "manual"
     schedule_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "AdDiagnosticRequest":
+        # Before runtime sanitisation the browser supplies selector references.
+        # Inside graph state the resolved Campaign whitelist is the complete,
+        # identity-free scope, so neither shop IDs nor product references exist.
+        if not self.campaign_ids and not self.profile_ids and not (self.selection_version and self.shop_ref and self.product_refs):
+            raise ValueError("请选择完整的店铺和产品范围")
+        return self
 
 
 class AdEntityRef(BaseModel):

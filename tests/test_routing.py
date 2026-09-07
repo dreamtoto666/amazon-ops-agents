@@ -16,7 +16,6 @@ def test_focused_product_diagnosis_fans_out_to_all_specialists():
 
     assert {task.agent for task in plan.tasks} == {
         SpecialistName.SALES_PROFIT,
-        SpecialistName.ADVERTISING,
         SpecialistName.INVENTORY,
         SpecialistName.MARKET_RISK,
     }
@@ -30,6 +29,14 @@ def test_profit_query_routes_only_to_sales_profit():
 
     assert [task.agent for task in plan.tasks] == [SpecialistName.SALES_PROFIT]
     assert plan.max_rounds == 1
+
+
+def test_advertising_query_routes_to_advertising_specialist():
+    intent = UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.99)
+
+    plan = build_initial_plan(intent, QueryScope(), "查询广告花费")
+
+    assert [task.agent for task in plan.tasks] == [SpecialistName.ADVERTISING]
 
 
 def test_custom_report_query_has_a_safe_default_route():

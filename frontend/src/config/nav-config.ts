@@ -54,6 +54,22 @@ export const navGroups: NavGroup[] = [
         items: []
       },
       {
+        title: '报关单填写',
+        url: '/dashboard/customs-declarations',
+        icon: 'fileTypeXls',
+        isActive: false,
+        shortcut: ['c', 'd'],
+        items: []
+      },
+      {
+        title: '欧洲报关表填写',
+        url: '/dashboard/european-customs-declarations',
+        icon: 'fileTypeXls',
+        isActive: false,
+        shortcut: ['e', 'd'],
+        items: []
+      },
+      {
         title: '账号管理',
         url: '/dashboard/account',
         icon: 'teams',

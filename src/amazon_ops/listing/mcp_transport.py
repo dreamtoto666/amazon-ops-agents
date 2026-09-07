@@ -22,6 +22,43 @@ from .mcp import (
 T = TypeVar("T")
 
 
+def _exception_text(exc: BaseException) -> str:
+    """Flatten exception groups so MCP JSON-RPC errors retain their meaning."""
+
+    seen: set[int] = set()
+    parts: list[str] = []
+
+    def visit(current: BaseException) -> None:
+        if id(current) in seen:
+            return
+        seen.add(id(current))
+        parts.append(str(current))
+        children = getattr(current, "exceptions", ())
+        if isinstance(children, tuple):
+            for child in children:
+                if isinstance(child, BaseException):
+                    visit(child)
+        for child in (current.__cause__, current.__context__):
+            if isinstance(child, BaseException):
+                visit(child)
+
+    visit(exc)
+    return " ".join(part for part in parts if part)
+
+
+def _classify_transport_failure(exc: BaseException) -> tuple[str, bool]:
+    text = _exception_text(exc).casefold()
+    if "unknown tool" in text or "tool not found" in text:
+        return "MCP_TOOL_UNAVAILABLE", False
+    if "catalogversion" in text or "schemaversion" in text:
+        return "MCP_CATALOG_VERSION_STALE", False
+    if "rate limit" in text or "too many requests" in text:
+        return "MCP_RATE_LIMITED", True
+    if "timeout" in text or isinstance(exc, (TimeoutError, ConnectionError)):
+        return "MCP_TRANSPORT_FAILURE", True
+    return "MCP_TRANSPORT_FAILURE", False
+
+
 class StreamableHTTPMCPTransport:
     """Official MCP SDK adapter for authenticated Streamable HTTP servers.
 
@@ -110,13 +147,11 @@ class StreamableHTTPMCPTransport:
         except MCPGatewayError:
             raise
         except Exception as exc:
-            retryable = isinstance(exc, (TimeoutError, ConnectionError)) or "timeout" in str(
-                exc
-            ).lower()
+            code, retryable = _classify_transport_failure(exc)
             raise MCPGatewayError(
                 f"{config.provider.value} MCP connection failed: {type(exc).__name__}",
                 provider=config.provider,
-                code="MCP_TRANSPORT_FAILURE",
+                code=code,
                 retryable=retryable,
             ) from exc
 

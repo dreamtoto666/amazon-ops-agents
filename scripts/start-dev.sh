@@ -8,7 +8,8 @@ API_PORT="${AMAZON_OPS_API_PORT:-8000}"
 cd "$PROJECT_DIR"
 PYTHONPATH="$PROJECT_DIR/src" uv run uvicorn amazon_ops.api:app \
   --host "$API_HOST" \
-  --port "$API_PORT" &
+  --port "$API_PORT" \
+  --reload &
 API_PROCESS_ID=$!
 
 cleanup() {

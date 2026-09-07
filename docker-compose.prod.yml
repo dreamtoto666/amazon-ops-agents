@@ -4,6 +4,8 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -20,10 +22,15 @@ services:
   api:
     image: ${AMAZON_OPS_API_IMAGE:?请使用本机镜像发布包部署}
     restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1536m
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_READONLY_URL: ${DATABASE_READONLY_URL:-}
       IDEMPOTENCY_TTL_SECONDS: ${IDEMPOTENCY_TTL_SECONDS:-86400}
       IDEMPOTENCY_DB_POOL_SIZE: ${IDEMPOTENCY_DB_POOL_SIZE:-10}
+      CONVERSATION_MEMORY_MAX_MESSAGES: ${CONVERSATION_MEMORY_MAX_MESSAGES:-20}
+      CONVERSATION_MEMORY_DB_POOL_SIZE: ${CONVERSATION_MEMORY_DB_POOL_SIZE:-10}
       AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE: ${AD_DIAGNOSTIC_HISTORY_DB_POOL_SIZE:-10}
       AUTH_DB_POOL_SIZE: ${AUTH_DB_POOL_SIZE:-10}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
@@ -33,6 +40,9 @@ services:
       SIF_MCP_SECRET: ${SIF_MCP_SECRET:-}
       LINGXING_MCP_URL: ${LINGXING_MCP_URL:-https://openmcp.lingxing.com/mcp-servers/lingxing-mcp}
       LINGXING_MCP_SECRET: ${LINGXING_MCP_SECRET}
+      LINGXING_OPEN_API_BASE_URL: ${LINGXING_OPEN_API_BASE_URL:-}
+      LINGXING_OPEN_API_APP_ID: ${LINGXING_OPEN_API_APP_ID:-}
+      LINGXING_OPEN_API_APP_SECRET: ${LINGXING_OPEN_API_APP_SECRET:-}
       APP_BASE_URL: ${APP_BASE_URL}
       LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
@@ -58,6 +68,8 @@ services:
   frontend:
     image: ${AMAZON_OPS_FRONTEND_IMAGE:?请使用本机镜像发布包部署}
     restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 768m
     environment:
       AGENT_API_BASE_URL: http://api:8000
     ports:

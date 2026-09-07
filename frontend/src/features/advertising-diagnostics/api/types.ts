@@ -8,13 +8,37 @@ export interface AdvertisingShop {
   account_type: string | null;
 }
 
+export interface AdvertisingSelectionProduct {
+  product_ref: string;
+  parent_asin: string;
+}
+
+export interface AdvertisingSelectionResponsible {
+  responsible_ref: string;
+  label: string;
+  products: AdvertisingSelectionProduct[];
+}
+
+export interface AdvertisingSelectionStore {
+  shop_ref: string;
+  label: string;
+  responsibles: AdvertisingSelectionResponsible[];
+}
+
+export interface AdvertisingSelectionDirectory {
+  version: string;
+  stores: AdvertisingSelectionStore[];
+}
+
 export interface DiagnosticPeriod {
   start: string;
   end: string;
 }
 
 export interface CreateAdvertisingRunInput {
-  profile_ids: string[];
+  selection_version: string;
+  shop_ref: string;
+  product_refs: string[];
   current_period: DiagnosticPeriod;
   baseline_period?: DiagnosticPeriod;
   goal: { growth_priority: "profit" | "balanced" | "scale" };
@@ -92,13 +116,6 @@ export interface AdvertisingDiagnosticResult {
   anomalies: AdvertisingAnomaly[];
   todos: AdvertisingTodo[];
   evidence: AdvertisingEvidence[];
-  llm_interpretations?: Array<{
-    campaign_id: string;
-    anomaly_id: string;
-    cross_report_explanations: string[];
-    suspected_patterns: string[];
-    missing_evidence: string[];
-  }>;
   warnings: string[];
 }
 
@@ -111,6 +128,11 @@ export interface AdvertisingRunRecord {
   result: AdvertisingDiagnosticResult | null;
   error: { code?: string; message?: string } | null;
   created_at?: string | null;
+  display_scope?: {
+    shop_label: string;
+    campaign_count: number;
+    current_period?: DiagnosticPeriod;
+  } | null;
 }
 
 export const ADVERTISING_STAGE_EVENT_NAMES = [

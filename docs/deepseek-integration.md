@@ -4,7 +4,9 @@
 
 项目所有需要大模型的角色统一使用 DeepSeek。确定性路由、关键词评分、规则质检和 MCP 数据转换仍由代码完成，不会为了“全用 LLM”而改成概率式逻辑。
 
-默认模型为 `deepseek-v4-flash`，默认关闭思考模式，用于降低普通结构化任务的延迟和成本。可通过 `.env` 覆盖模型，但生产代码不为每个 Agent 配置不同供应商。
+默认模型为 `deepseek-v4-flash`，默认关闭思考模式（`reasoning_effort=off`），用于降低普通结构化任务的延迟和成本。聊天输入框可为单次任务选择模型（`deepseek-v4-flash`、`deepseek-v4-pro`、`deepseek-v4-flash-vision-exp`）**和推理等级**（`off`/`low`/`high`/`max`，默认 `off`）；选择会贯穿总控与广告只读专家（它们共享同一 `DeepSeekModelRoles`），且不会改变其他任务的模型。未选择时使用 `.env` 中的默认模型。生产代码不为每个 Agent 配置不同供应商。
+
+总控各角色用结构化 JSON 输出（`response_format: json_object`），可自由开启思考；广告只读专家（ReAct）靠绑定只读工具查询报表，**不强制 `tool_choice`**（DeepSeek 拒绝 thinking 与强制工具选择并存），依赖 prompt 要求“必须先调用一次工具”，并在模型未调用工具时显式失败（不编造数据）。
 
 ## 已接入的角色
 
@@ -23,6 +25,8 @@
 DEEPSEEK_API_KEY=
 DEEPSEEK_MODEL=deepseek-v4-flash
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+# 可选推理等级：off / low / high / max；留空则跟随 thinking_enabled。前端请求可逐次覆盖。
+DEEPSEEK_REASONING_EFFORT=
 ```
 
 只有 `DEEPSEEK_API_KEY` 必须手动填写。密钥不进入 LangGraph State、SSE 事件、日志或模型上下文。

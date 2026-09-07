@@ -48,7 +48,7 @@ export default function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton
               size='lg'
-              render={<Link href='/dashboard/chat' aria-label='打开 AI 运营助手' />}
+              render={<Link href='/dashboard/chat' prefetch={false} aria-label='打开 AI 运营助手' />}
             >
               <span className='bg-primary text-primary-foreground flex size-8 items-center justify-center rounded-lg'>
                 <Icons.sparkles className='size-4' />
@@ -92,7 +92,7 @@ export default function AppSidebar() {
                         {item.items?.map((subItem) => (
                           <SidebarMenuSubItem key={subItem.title}>
                             <SidebarMenuSubButton
-                              render={<Link href={subItem.url} aria-label={subItem.title} />}
+                              render={<Link href={subItem.url} prefetch={false} aria-label={subItem.title} />}
                               isActive={pathname === subItem.url}
                             >
                               <span>{subItem.title}</span>
@@ -105,7 +105,7 @@ export default function AppSidebar() {
                 ) : (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
-                      render={<Link href={item.url} aria-label={item.title} />}
+                      render={<Link href={item.url} prefetch={false} aria-label={item.title} />}
                       tooltip={item.title}
                       isActive={pathname === item.url}
                     >
@@ -126,7 +126,7 @@ export default function AppSidebar() {
               size='lg'
               tooltip='个人中心'
               isActive={pathname === '/dashboard/profile'}
-              render={<Link href='/dashboard/profile' aria-label='打开个人中心' />}
+              render={<Link href='/dashboard/profile' prefetch={false} aria-label='打开个人中心' />}
             >
               <Avatar className='size-8'>
                 <AvatarFallback>{user?.username?.slice(0, 1).toUpperCase() ?? 'U'}</AvatarFallback>

@@ -68,21 +68,13 @@ class RuleBasedDataInspectionAgent:
     def invoke(
         self, request: AdDiagnosticRequest, state: AdvertisingDiagnosticState
     ) -> DataInspectionResult:
-        current = self.gateway.campaign_report(
-            profile_ids=request.profile_ids,
-            period=request.current_period,
-            campaign_ids=request.campaign_ids,
-        )
+        current = self._campaign_report(request, request.current_period)
         current_evidence = self._evidence(current, period="current", state=state)
         current_snapshots = self._snapshots(current.rows, period="current")
         baseline_snapshots: list[AdMetricSnapshot] = []
         baseline_evidence: DiagnosticEvidence | None = None
         if request.baseline_period:
-            baseline = self.gateway.campaign_report(
-                profile_ids=request.profile_ids,
-                period=request.baseline_period,
-                campaign_ids=request.campaign_ids,
-            )
+            baseline = self._campaign_report(request, request.baseline_period)
             baseline_evidence = self._evidence(baseline, period="baseline", state=state)
             baseline_snapshots = self._snapshots(baseline.rows, period="baseline")
         baseline_by_entity = {
@@ -121,6 +113,19 @@ class RuleBasedDataInspectionAgent:
             ],
             warnings=warnings,
         )
+
+    def _campaign_report(self, request: AdDiagnosticRequest, period: DiagnosticPeriod) -> AdvertisingReport:
+        kwargs: dict[str, Any] = {"profile_ids": request.profile_ids, "period": period, "campaign_ids": request.campaign_ids}
+        if request.asins:
+            kwargs["asins"] = request.asins
+        try:
+            return self.gateway.campaign_report(**kwargs)
+        except TypeError as exc:
+            # Compatibility for test doubles and non-migrated read-only MCP
+            # gateways. They are never used when a selected product scope exists.
+            if request.asins:
+                raise RuntimeError("当前广告数据源无法验证所选产品范围。") from exc
+            raise
 
     @classmethod
     def _hypotheses(cls, anomalies: list[DetectedAnomaly]) -> list[InspectionHypothesis]:
@@ -1185,13 +1190,21 @@ class EvidenceBasedProblemAttributionAgent:
                     if not pending.get(tool) or not self._reserve_call(ledger, round_number, tool):
                         continue
                     campaign_ids = pending[tool].pop(0)
-                    future = executor.submit(
-                        self.gateway.attribution_report,
-                        tool=tool,
-                        profile_ids=request.profile_ids,
-                        period=request.current_period,
-                        campaign_ids=campaign_ids,
-                    )
+                    try:
+                        future = executor.submit(
+                            self.gateway.attribution_report,
+                            tool=tool,
+                            profile_ids=request.profile_ids,
+                            period=request.current_period,
+                            campaign_ids=campaign_ids,
+                        )
+                    except RuntimeError as exc:
+                        # A process shutdown can race an in-flight legacy
+                        # diagnostic.  Do not leak a Python/LangGraph
+                        # traceback or continue creating work in that state.
+                        if "interpreter shutdown" in str(exc):
+                            raise RuntimeError("广告巡检服务正在重启，请稍后重新发起查询。") from exc
+                        raise
                     wave.append((tool, campaign_ids, future))
                 if not wave:
                     break
@@ -1322,6 +1335,10 @@ class ApprovalRequiredReviewTodoAgent:
                 anomalies_by_campaign.setdefault(
                     (item.entity.profile_id, item.entity.campaign_id), []
                 ).append(item)
+        snapshots_by_campaign = {
+            (item.entity.profile_id, item.entity.campaign_id or item.entity.entity_id, item.period): item
+            for item in inspection.snapshots
+        }
         cause_by_id = {item.cause_id: item for item in attribution.causes}
         evidence_by_id = {item.evidence_id: item for item in attribution.evidence}
         todos: list[OperationsTodo] = []
@@ -1357,10 +1374,6 @@ class ApprovalRequiredReviewTodoAgent:
                 item for item in attribution.causes
                 if item.verified and campaign_anomaly_ids.intersection(item.anomaly_ids)
             ]
-            campaign_findings = [
-                item for item in attribution.findings
-                if item.campaign_id == recommendation.target.campaign_id
-            ]
             priority = self._priority(anomaly.severity if anomaly else "medium")
             detail_evidence = {
                 item.evidence_id: item
@@ -1395,13 +1408,18 @@ class ApprovalRequiredReviewTodoAgent:
                         anomaly,
                         cause,
                         recommendation,
+                        snapshots_by_campaign.get((
+                            recommendation.target.profile_id,
+                            recommendation.target.campaign_id or recommendation.target.entity_id,
+                            "current",
+                        )),
+                        snapshots_by_campaign.get((
+                            recommendation.target.profile_id,
+                            recommendation.target.campaign_id or recommendation.target.entity_id,
+                            "baseline",
+                        )),
                         list(detail_evidence.values()),
-                        anomalies_by_campaign.get(
-                            (recommendation.target.profile_id, recommendation.target.campaign_id or ""),
-                            [],
-                        ),
                         campaign_causes,
-                        campaign_findings,
                     ),
                     approval_required=True,
                     due_at=datetime.now(timezone.utc) + timedelta(days=1 if priority in {"urgent", "high"} else 3),
@@ -1418,10 +1436,10 @@ class ApprovalRequiredReviewTodoAgent:
         anomaly: DetectedAnomaly | None,
         cause: ProblemCause | None,
         recommendation: StrategyRecommendation,
+        current_snapshot: AdMetricSnapshot | None,
+        baseline_snapshot: AdMetricSnapshot | None,
         evidence: list[DiagnosticEvidence],
-        related_anomalies: list[DetectedAnomaly],
         campaign_causes: list[ProblemCause],
-        campaign_findings: list[AttributionFinding],
     ) -> TodoDetail:
         target_name = recommendation.target.name or recommendation.target.entity_id
         if anomaly is None:
@@ -1439,7 +1457,12 @@ class ApprovalRequiredReviewTodoAgent:
                 "cvr": "转化率",
             }.get(anomaly.metric, anomaly.metric)
             diagnosis = f"“{target_name}”出现{metric_label}异常，严重程度为{anomaly.severity}。"
-            metric_summary = ApprovalRequiredReviewTodoAgent._metric_summary(anomaly, metric_label)
+            metric_summary = ApprovalRequiredReviewTodoAgent._metric_summary(
+                anomaly,
+                metric_label,
+                current_snapshot=current_snapshot,
+                baseline_snapshot=baseline_snapshot,
+            )
         campaign_id = recommendation.target.campaign_id
         relevant_evidence = [
             item
@@ -1450,11 +1473,6 @@ class ApprovalRequiredReviewTodoAgent:
             item.statement for item in campaign_causes
             if item.role == "contributing" and (cause is None or item.cause_id != cause.cause_id)
         ][:2]
-        direct_facts = [item.statement for item in sorted(
-            campaign_findings,
-            key=lambda item: (item.contribution, item.confidence),
-            reverse=True,
-        )][:4]
         coverage = {
             "ad_campaign_search_term_report": "搜索词",
             "ad_campaign_keyword_report": "关键词",
@@ -1469,7 +1487,6 @@ class ApprovalRequiredReviewTodoAgent:
         attribution_parts = [
             f"主因：{cause.statement if cause else recommendation.rationale}",
             *( [f"辅助因素：{'；'.join(contributing)}"] if contributing else []),
-            *( [f"已验证的明细事实：{'；'.join(direct_facts)}"] if direct_facts else []),
         ]
         return TodoDetail(
             diagnosis=diagnosis,
@@ -1593,14 +1610,49 @@ class ApprovalRequiredReviewTodoAgent:
         return list(dict.fromkeys(findings))[:4]
 
     @staticmethod
-    def _metric_summary(anomaly: DetectedAnomaly, label: str) -> str:
-        text = f"当前周期 {label}：{ApprovalRequiredReviewTodoAgent._metric_value(anomaly.metric, anomaly.current_value)}"
-        if anomaly.baseline_value is not None:
-            text += f"；基准周期：{ApprovalRequiredReviewTodoAgent._metric_value(anomaly.metric, anomaly.baseline_value)}"
-        if anomaly.absolute_change is not None:
-            sign = "+" if anomaly.absolute_change > 0 else ""
-            text += f"；变化：{sign}{ApprovalRequiredReviewTodoAgent._metric_value(anomaly.metric, anomaly.absolute_change)}"
+    def _metric_summary(
+        anomaly: DetectedAnomaly,
+        label: str,
+        *,
+        current_snapshot: AdMetricSnapshot | None,
+        baseline_snapshot: AdMetricSnapshot | None,
+    ) -> str:
+        if current_snapshot is None:
+            text = f"当前周期 {label}：{ApprovalRequiredReviewTodoAgent._metric_value(anomaly.metric, anomaly.current_value)}"
+            if anomaly.baseline_value is not None:
+                text += f"；基准周期：{ApprovalRequiredReviewTodoAgent._metric_value(anomaly.metric, anomaly.baseline_value)}"
+            return text + "。"
+
+        current_metrics = ApprovalRequiredReviewTodoAgent._snapshot_metric_values(current_snapshot)
+        text = f"当前周期：{'；'.join(current_metrics)}"
+        if baseline_snapshot is not None:
+            baseline_metrics = ApprovalRequiredReviewTodoAgent._snapshot_metric_values(baseline_snapshot)
+            text += f"。基准周期：{'；'.join(baseline_metrics)}"
         return text + "。"
+
+    @staticmethod
+    def _snapshot_metric_values(snapshot: AdMetricSnapshot) -> list[str]:
+        metrics = [
+            ("曝光量", "impressions", snapshot.impressions),
+            ("点击量", "clicks", snapshot.clicks),
+            ("CTR", "ctr", snapshot.ctr),
+            ("花费", "spend", snapshot.spend),
+            ("CPC", "cpc", snapshot.cpc),
+            ("订单量", "orders", snapshot.orders),
+            ("广告销售额", "sales", snapshot.sales),
+            ("CVR", "cvr", snapshot.cvr),
+            ("ACOS", "acos", snapshot.acos),
+            ("ROAS", "roas", snapshot.roas),
+        ]
+        values = [
+            f"{label}：{ApprovalRequiredReviewTodoAgent._metric_value(metric, value)}"
+            for label, metric, value in metrics
+        ]
+        if snapshot.budget is not None:
+            values.append(
+                f"日预算：{ApprovalRequiredReviewTodoAgent._metric_value('budget', snapshot.budget)}"
+            )
+        return values
 
     @staticmethod
     def _metric_value(metric: str, value: float | None) -> str:
@@ -1608,6 +1660,8 @@ class ApprovalRequiredReviewTodoAgent:
             return "—"
         if metric in {"acos", "ctr", "cvr"}:
             return f"{value * 100:.1f}%"
+        if metric in {"impressions", "clicks", "orders", "ad_units"}:
+            return f"{value:,.0f}"
         return f"{value:.2f}"
 
     @staticmethod

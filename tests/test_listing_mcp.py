@@ -13,6 +13,7 @@ from amazon_ops.listing import (
     sif_mcp_config,
 )
 from amazon_ops.listing.mcp import _payload_summary, _trace_tool_inputs
+from amazon_ops.listing.mcp_transport import _classify_transport_failure
 
 
 class FakeTransport:
@@ -48,8 +49,8 @@ def test_lingxing_config_uses_streamable_http_header_without_exposing_key():
     assert payload["auth_header"] == "X-Mcp-Key"
     assert payload["api_key_env"] == "LINGXING_MCP_SECRET"
     assert payload["max_concurrency"] == 1
-    assert "get_fba_stock_list" in payload["allowed_tools"]
-    assert "put_campaigns" not in payload["allowed_tools"]
+    assert set(payload["allowed_tools"]) == {"help", "search", "action"}
+    assert "ad_campaign_report" not in payload["allowed_tools"]
 
 
 def test_lingxing_config_uses_default_endpoint_when_override_is_empty(monkeypatch):
@@ -125,6 +126,12 @@ def test_temporary_transport_failure_is_marked_retryable():
 
     assert exc_info.value.retryable is True
     assert exc_info.value.code == "MCP_TEMPORARY_FAILURE"
+
+
+def test_nested_unknown_tool_error_is_not_misclassified_as_connection_failure():
+    error = ExceptionGroup("stream closed", [RuntimeError("unknown tool: ad_auth_shops")])
+
+    assert _classify_transport_failure(error) == ("MCP_TOOL_UNAVAILABLE", False)
 
 
 def test_tool_trace_input_redacts_sensitive_arguments_and_keeps_business_ids():

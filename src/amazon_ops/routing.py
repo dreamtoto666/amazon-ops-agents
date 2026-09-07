@@ -18,8 +18,8 @@ from .models import (
 PRIMARY_ROUTES: dict[Domain, SpecialistName] = {
     Domain.STORE: SpecialistName.SALES_PROFIT,
     Domain.PRODUCT: SpecialistName.SALES_PROFIT,
-    Domain.PROFIT: SpecialistName.SALES_PROFIT,
     Domain.ADVERTISING: SpecialistName.ADVERTISING,
+    Domain.PROFIT: SpecialistName.SALES_PROFIT,
     Domain.INVENTORY: SpecialistName.INVENTORY,
     Domain.KEYWORD: SpecialistName.MARKET_RISK,
     Domain.COMPETITOR: SpecialistName.MARKET_RISK,
@@ -53,7 +53,6 @@ def build_initial_plan(intent: UserIntent, scope: QueryScope, normalized_request
     if intent.domain == Domain.PRODUCT and intent.action == Action.DIAGNOSE and scope.has_product_target():
         agents = [
             SpecialistName.SALES_PROFIT,
-            SpecialistName.ADVERTISING,
             SpecialistName.INVENTORY,
             SpecialistName.MARKET_RISK,
         ]

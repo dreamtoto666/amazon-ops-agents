@@ -252,6 +252,18 @@ class PostgresIdempotencyRegistry:
                         ON idempotency_records (expires_at)
                         """
                     )
+                    connection.execute(
+                        "COMMENT ON TABLE idempotency_records IS '异步任务创建幂等记录：同一 namespace 和幂等键只对应一个请求与响应。'"
+                    )
+                    connection.execute(
+                        "COMMENT ON COLUMN idempotency_records.namespace IS '幂等作用域，通常包含业务类型与当前认证用户。'"
+                    )
+                    connection.execute(
+                        "COMMENT ON COLUMN idempotency_records.request_fingerprint IS '请求内容的 SHA-256 指纹，用于拒绝同键不同请求。'"
+                    )
+                    connection.execute(
+                        "COMMENT ON COLUMN idempotency_records.response_payload IS '首次成功创建任务时保存的响应 JSON，用于安全重放。'"
+                    )
                 self._schema_ready = True
             except Exception as exc:
                 raise IdempotencyStorageError(

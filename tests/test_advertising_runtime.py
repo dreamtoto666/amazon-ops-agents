@@ -18,6 +18,7 @@ from amazon_ops.advertising.models import (
     AdShop,
     AnomalyType,
     DataInspectionResult,
+    DiagnosticPeriod,
     DetectedAnomaly,
     DiagnosticEvidence,
     InspectionHypothesis,
@@ -26,7 +27,7 @@ from amazon_ops.advertising.models import (
 from amazon_ops.advertising.llm_agents import DeepSeekDataInspectionAgent
 from amazon_ops.advertising.llm_models import InspectionHypothesisLLMOutput
 from amazon_ops.llm import LLMError
-from amazon_ops.advertising.runtime import AdvertisingRunManager, _LedgerGateway
+from amazon_ops.advertising.runtime import AdvertisingRunManager, ResolvedExecutionScope, _LedgerGateway, _ScopedAdvertisingGateway
 from amazon_ops.api import create_app
 from amazon_ops.auth import AuthUser
 from amazon_ops.idempotency import InMemoryIdempotencyRegistry
@@ -97,6 +98,30 @@ class FakeAdvertisingGateway:
             total=1,
             trace=trace(tool),
         )
+
+
+def test_private_scope_filters_reports_and_removes_asin_store_and_name_fields():
+    gateway = _ScopedAdvertisingGateway(
+        FakeAdvertisingGateway(),
+        ResolvedExecutionScope(sid="sensitive-sid", child_asins=("B0SECRET",), campaign_ids=("campaign-1",)),
+    )
+    report = gateway.campaign_report(profile_ids=["attempted-store"], period=DiagnosticPeriod(start=date(2026, 8, 1), end=date(2026, 8, 1)), campaign_ids=["campaign-1", "outside"])
+
+    serialized = json.dumps({"rows": report.rows, "arguments": report.arguments}, ensure_ascii=False)
+    assert "sensitive-sid" not in serialized
+    assert "B0SECRET" not in serialized
+    assert "核心词广告" not in serialized
+    assert report.rows[0]["profile_id"] == "scoped-store"
+    assert report.arguments == {"product_scope_applied": True, "campaign_count": 1}
+
+
+def test_agent_safe_campaign_scope_validates_without_store_or_asin():
+    request = AdDiagnosticRequest.model_validate({
+        "profile_ids": [], "campaign_ids": ["campaign-1"],
+        "current_period": {"start": "2026-08-01", "end": "2026-08-01"},
+    })
+    assert request.profile_ids == []
+    assert request.asins == []
 
 
 class FakeAdvertisingLLM:
@@ -458,6 +483,24 @@ def test_deepseek_strategy_is_clamped_before_todo_creation():
 
     assert record.result is not None
     assert record.result.todos[0].proposed_change == {"bid_change_percent": -30.0}
+
+
+def test_invalid_strategy_evidence_is_discarded_without_failing_the_run():
+    class InvalidEvidenceLLM(FakeAdvertisingLLM):
+        def complete(self, **kwargs):
+            result = super().complete(**kwargs)
+            if kwargs["output_model"].__name__ == "StrategyLLMOutput":
+                payload = result.model_dump()
+                payload["decisions"][0]["evidence_refs"] = ["not-a-verified-evidence-ref"]
+                return kwargs["output_model"].model_validate(payload)
+            return result
+
+    manager = AdvertisingRunManager(gateway=FakeAdvertisingGateway(), llm=InvalidEvidenceLLM())
+    record = wait_for_run(manager, manager.submit(AdDiagnosticRequest.model_validate(request_payload())))
+
+    assert record.result is not None
+    assert record.result.todos == []
+    assert any("未验证证据" in warning for warning in record.result.warnings)
 
 
 def _detail_inspection() -> DataInspectionResult:

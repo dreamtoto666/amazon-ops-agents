@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
-from .llm import StructuredLLM
+from .events import get_stage_reporter
+from .llm import DeepSeekStructuredLLM, StructuredLLM
 from .models import AgentTask, FinalResponse, QueryScope, SpecialistResult, UnderstandRequestResult
 from .prompts import (
     DIRECT_RESPONDER_SYSTEM_PROMPT,
@@ -41,11 +43,23 @@ class DeepSeekRequestInterpreter:
         self.llm = llm
 
     def invoke(self, state: dict) -> UnderstandRequestResult:
+        reporter = get_stage_reporter(state)
+        kwargs: dict[str, Any] = {}
+        if reporter is not None and isinstance(self.llm, DeepSeekStructuredLLM):
+            kwargs["thinking"] = True
+            kwargs["on_reasoning_delta"] = lambda text: reporter.emit(
+                "reasoning.delta", text=text
+            )
+        if isinstance(self.llm, DeepSeekStructuredLLM):
+            images = state.get("image_attachments", [])
+            if isinstance(images, list) and all(isinstance(item, str) for item in images):
+                kwargs["image_data_urls"] = images
         return self.llm.complete(
             system_prompt=REQUEST_INTERPRETER_SYSTEM_PROMPT,
             context=build_request_context(state),
             output_model=UnderstandRequestResult,
             max_tokens=3000,
+            **kwargs,
         )
 
 
@@ -54,11 +68,19 @@ class DeepSeekResultAggregator:
         self.llm = llm
 
     def invoke(self, state: dict) -> FinalResponse:
+        reporter = get_stage_reporter(state)
+        kwargs: dict[str, Any] = {}
+        if reporter is not None and isinstance(self.llm, DeepSeekStructuredLLM):
+            kwargs["thinking"] = True
+            kwargs["on_reasoning_delta"] = lambda text: reporter.emit(
+                "reasoning.delta", text=text
+            )
         return self.llm.complete(
             system_prompt=RESULT_AGGREGATOR_SYSTEM_PROMPT,
             context=build_aggregation_context(state),
             output_model=FinalResponse,
             max_tokens=5000,
+            **kwargs,
         )
 
 
@@ -67,12 +89,50 @@ class DeepSeekDirectResponder:
         self.llm = llm
 
     def invoke(self, state: dict) -> FinalResponse:
+        reporter = get_stage_reporter(state)
+        kwargs: dict[str, Any] = {}
+        if reporter is not None and isinstance(self.llm, DeepSeekStructuredLLM):
+            kwargs["thinking"] = True
+            kwargs["on_reasoning_delta"] = lambda text: reporter.emit(
+                "reasoning.delta", text=text
+            )
+        if isinstance(self.llm, DeepSeekStructuredLLM):
+            images = state.get("image_attachments", [])
+            if isinstance(images, list) and all(isinstance(item, str) for item in images):
+                kwargs["image_data_urls"] = images
         return self.llm.complete(
             system_prompt=DIRECT_RESPONDER_SYSTEM_PROMPT,
             context=build_direct_response_context(state),
             output_model=FinalResponse,
             max_tokens=3000,
+            **kwargs,
         )
+
+    def stream(
+        self,
+        state: dict,
+        on_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None = None,
+    ) -> FinalResponse:
+        """Generate only the user-facing answer text as a true provider stream."""
+        if not isinstance(self.llm, DeepSeekStructuredLLM):
+            return self.invoke(state)
+        images = state.get("image_attachments", [])
+        answer = self.llm.stream_text(
+            system_prompt=(
+                DIRECT_RESPONDER_SYSTEM_PROMPT
+                + "\n\n只输出面向用户的回答正文，不要 JSON、Markdown 代码块或思考过程。"
+            ),
+            context=build_direct_response_context(state),
+            on_delta=on_delta,
+            on_reasoning_delta=on_reasoning_delta,
+            max_tokens=3000,
+            thinking=True,
+            image_data_urls=(
+                images if isinstance(images, list) and all(isinstance(item, str) for item in images) else None
+            ),
+        )
+        return FinalResponse(answer=answer)
 
 
 class DeterministicAggregator:

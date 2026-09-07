@@ -141,36 +141,10 @@ SIF_KEYWORD_TOOLS = frozenset(
         "market_get_keyword_root_competitors",
     }
 )
-LINGXING_READ_ONLY_TOOLS = frozenset(
-    {
-        "ad_auth_shops",
-        "ad_campaign_group_report",
-        "ad_campaign_keyword_report",
-        "ad_campaign_product_report",
-        "ad_campaign_report",
-        "ad_campaign_search_term_report",
-        "ad_campaign_targeting_report",
-        "ad_portfolio_report_shop",
-        "erp_listing",
-        "get_custom_indicator_field",
-        "get_custom_indicator_list",
-        "get_custom_report_by_id",
-        "get_custom_report_list",
-        "get_fba_stock_list",
-        "get_multi_platform_shop_list",
-        "get_my_sids",
-        "get_profit_report_msku",
-        "query_erp_competitive_monitor",
-        "query_erp_follow_sale_monitor",
-        "query_erp_keyword_ranking_asin",
-        "query_erp_keyword_ranking_keyword",
-        "query_erp_new_monitor",
-        "query_fba_valid_list",
-        "query_order_profit_list",
-        "query_order_profit_list_gross_profit",
-        "query_product_performance_asin_lists",
-    }
-)
+# LingXing exposes business capabilities through a dynamic catalog.  These are
+# the only top-level MCP methods required to discover and invoke that catalog;
+# individual business tool IDs are separately allowlisted by their consumers.
+LINGXING_CATALOG_TOOLS = frozenset({"help", "search", "action"})
 
 
 class MCPServerConfig(BaseModel):
@@ -215,7 +189,7 @@ def lingxing_mcp_config() -> MCPServerConfig:
         api_key_env="LINGXING_MCP_SECRET",
         auth_header="X-Mcp-Key",
         max_concurrency=1,
-        allowed_tools=LINGXING_READ_ONLY_TOOLS,
+        allowed_tools=LINGXING_CATALOG_TOOLS,
     )
 
 

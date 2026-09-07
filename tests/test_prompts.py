@@ -11,7 +11,9 @@ from amazon_ops.prompts import (
 
 
 def test_interpreter_prompt_contains_core_safety_and_routing_contracts():
-    assert "不调用领星 MCP" in REQUEST_INTERPRETER_SYSTEM_PROMPT
+    assert "不调用任何外部 MCP" in REQUEST_INTERPRETER_SYSTEM_PROMPT
+    assert "不得要求 `shop_id`" in REQUEST_INTERPRETER_SYSTEM_PROMPT
+    assert "不得因缺少 `period` 进入 clarify" in REQUEST_INTERPRETER_SYSTEM_PROMPT
     assert "确定性路由器" in REQUEST_INTERPRETER_SYSTEM_PROMPT
     assert "route=approval" in REQUEST_INTERPRETER_SYSTEM_PROMPT
     assert "低 confidence 本身不是追问理由" in REQUEST_INTERPRETER_SYSTEM_PROMPT

@@ -15,7 +15,9 @@ from .interfaces import (
     SpecialistAgent,
 )
 from .models import (
+    Action,
     AgentTask,
+    Domain,
     FinalResponse,
     QueryScope,
     RequestRoute,
@@ -50,11 +52,39 @@ def build_controller_graph(
         if stages:
             stages.start(identifier, StageName.UNDERSTANDING, title="正在理解你的问题")
         try:
-            result = interpreter.invoke(dict(state))
+            interpreter_state = dict(state)
+            if stages:
+                interpreter_state["_stage_reporter"] = StageReporter(
+                    controller=stages,
+                    run_id=identifier,
+                    stage=StageName.UNDERSTANDING,
+                )
+            result = interpreter.invoke(interpreter_state)
         except Exception as exc:
             if stages:
                 stages.fail(identifier, StageName.UNDERSTANDING, str(exc))
             raise
+        if (
+            result.intent.domain == Domain.ADVERTISING
+            and result.intent.action in {Action.QUERY, Action.OVERVIEW, Action.COMPARE}
+            and result.route == RequestRoute.CLARIFY
+            and result.missing_fields
+            and set(result.missing_fields).issubset({"shop_id", "period"})
+        ):
+            result = result.model_copy(
+                update={
+                    "route": RequestRoute.EXECUTE,
+                    "missing_fields": [],
+                    "clarification_question": None,
+                }
+            )
+        # With attached images, route straight to the vision responder instead of
+        # an operational specialist: the user wants the image analyzed, not a
+        # live-data query. Only vision-capable models may carry images (enforced
+        # in submit), so the responder reads the image from state and answers
+        # directly about it.
+        has_images = bool(state.get("image_attachments"))
+        final_route = RequestRoute.RESPOND.value if has_images else result.route.value
         if stages:
             stages.progress(
                 identifier,
@@ -62,14 +92,14 @@ def build_controller_graph(
                 kind="intent.resolved",
                 domain=result.intent.domain.value,
                 action=result.intent.action.value,
-                route=result.route.value,
+                route=final_route,
             )
             stages.complete(identifier, StageName.UNDERSTANDING)
         return {
             "understanding": result.model_dump(mode="json"),
             "intent": result.intent.model_dump(mode="json"),
             "scope": result.scope.model_dump(mode="json"),
-            "route": result.route.value,
+            "route": final_route,
             "risk_level": result.risk_level.value,
             "missing_fields": result.missing_fields,
             "clarification_question": result.clarification_question,
@@ -94,18 +124,37 @@ def build_controller_graph(
                     question=answer,
                 )
         elif route == RequestRoute.RESPOND:
-            capability_answer = build_capability_answer(state)
-            response = (
-                responder.invoke(dict(state))
-                if responder and capability_answer is None
-                else None
-            )
+            has_images = bool(state.get("image_attachments"))
+            # With an attached image, skip the deterministic capability answer so
+            # the vision responder actually reads the picture and answers about
+            # it, instead of returning a static capabilities statement.
+            capability_answer = None if has_images else build_capability_answer(state)
+            if stages:
+                stages.start(identifier, StageName.SYNTHESIS, title="正在分析图片" if has_images else "正在整理回复")
+            reporter = StageReporter(controller=stages, run_id=identifier, stage=StageName.SYNTHESIS) if stages else None
+            response = None
+            streamed = False
+            if responder and capability_answer is None:
+                stream = getattr(responder, "stream", None)
+                if callable(stream) and reporter:
+                    response = stream(
+                        dict(state),
+                        on_delta=lambda text: reporter.emit("response.delta", text=text),
+                        on_reasoning_delta=lambda text: reporter.emit("reasoning.delta", text=text),
+                    )
+                    streamed = True
+                else:
+                    responder_state = dict(state)
+                    if reporter is not None:
+                        responder_state["_stage_reporter"] = reporter
+                    response = responder.invoke(responder_state)
             answer = capability_answer or (
                 response.answer if response else understanding.normalized_request
             )
             if stages:
-                stages.start(identifier, StageName.SYNTHESIS, title="正在整理回复")
-                stages.progress(identifier, StageName.SYNTHESIS, kind="response.ready")
+                if not streamed:
+                    stages.progress(identifier, StageName.SYNTHESIS, kind="response.delta", text=answer)
+                stages.progress(identifier, StageName.SYNTHESIS, kind="response.completed")
                 stages.complete(identifier, StageName.SYNTHESIS)
                 stages.finish(
                     identifier,
@@ -369,6 +418,16 @@ def build_controller_graph(
                 stages.fail(identifier, StageName.SYNTHESIS, str(exc))
             raise
         if stages:
+            specialist_results = [
+                SpecialistResult.model_validate(item)
+                for item in state.get("specialist_results", [])
+            ]
+            all_specialists_failed = bool(specialist_results) and all(
+                item.status != "completed" for item in specialist_results
+            )
+            if all_specialists_failed:
+                stages.fail(identifier, StageName.SYNTHESIS, response.answer)
+                return {"final_response": response.model_dump(mode="json")}
             stages.progress(
                 identifier,
                 StageName.SYNTHESIS,

@@ -1,0 +1,18 @@
+[Unit]
+Description=Amazon Ops Docker Compose application
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/amazon-ops/current
+ExecStart=/usr/bin/docker compose --env-file /opt/amazon-ops/shared/.env --env-file /opt/amazon-ops/current/.image-release.env -f /opt/amazon-ops/current/docker-compose.prod.yml up
+ExecStop=/usr/bin/docker compose --env-file /opt/amazon-ops/shared/.env --env-file /opt/amazon-ops/current/.image-release.env -f /opt/amazon-ops/current/docker-compose.prod.yml down
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   advertisingHistoryQueryOptions,
-  advertisingShopsQueryOptions,
+  advertisingSelectionDirectoryQueryOptions,
 } from "../api/queries";
 import {
   createAdvertisingRun,
@@ -55,6 +55,7 @@ import {
 import type {
   AdvertisingAnomaly,
   AdvertisingDiagnosticResult,
+  AdvertisingRunRecord,
   AdvertisingStage,
   AdvertisingStageEvent,
 } from "../api/types";
@@ -269,10 +270,46 @@ function proposedChangeLabel(value: Record<string, unknown>) {
   return "人工复核后决定";
 }
 
+function isInternalTrustBoundaryWarning(warning: string) {
+  return (
+    (warning.includes("领星返回") && warning.includes("不可信")) ||
+    (warning.includes("广告名称") && warning.includes("不可信")) ||
+    (warning.includes("外部文本") && warning.includes("不可信"))
+  );
+}
+
+function visibleDiagnosticWarnings(warnings: string[] | undefined) {
+  const visible = new Set<string>();
+  for (const warning of warnings ?? []) {
+    if (isInternalTrustBoundaryWarning(warning)) continue;
+    if (warning.includes("无基准期") || warning.includes("未启用基准周期")) {
+      visible.add("当前周期体检模式：未启用基准周期趋势对比。");
+      continue;
+    }
+    visible.add(warning);
+  }
+  return [...visible];
+}
+
+function historyRunTitle(record: AdvertisingRunRecord) {
+  const scope = record.display_scope;
+  if (!scope?.shop_label) return record.result?.summary ?? record.error?.message ?? "广告巡检进行中";
+  const period = scope.current_period;
+  const range = period ? `${period.start} 至 ${period.end}` : "当前周期";
+  return `${scope.shop_label} · ${range} 广告巡检`;
+}
+
+function historyRunDetail(record: AdvertisingRunRecord) {
+  if (!record.result) return record.error?.message ?? "巡检进行中";
+  return `发现 ${record.result.anomalies.length} 个异常，生成 ${record.result.todos.length} 个运营代办。`;
+}
+
 export function AdvertisingDiagnosticsWorkbench() {
-  const shopsQuery = useQuery(advertisingShopsQueryOptions());
+  const directoryQuery = useQuery(advertisingSelectionDirectoryQueryOptions());
   const historyQuery = useQuery(advertisingHistoryQueryOptions());
-  const [profileId, setProfileId] = useState("");
+  const [responsibleRef, setResponsibleRef] = useState("");
+  const [shopRef, setShopRef] = useState("");
+  const [productRef, setProductRef] = useState("");
   const [currentStart, setCurrentStart] = useState(() => daysAgo(6));
   const [currentEnd, setCurrentEnd] = useState(() => daysAgo(0));
   const [baselineStart, setBaselineStart] = useState(() => daysAgo(13));
@@ -283,14 +320,22 @@ export function AdvertisingDiagnosticsWorkbench() {
   const [traceId, setTraceId] = useState<string>();
   const [events, setEvents] = useState<AdvertisingStageEvent[]>([]);
   const [result, setResult] = useState<AdvertisingDiagnosticResult>();
+  const [historyScope, setHistoryScope] = useState<{ shop_label: string; campaign_count: number } | null>();
   const [expandedTodoId, setExpandedTodoId] = useState<string | null>(null);
   const [runError, setRunError] = useState<string>();
   const [connected, setConnected] = useState(false);
 
-  useEffect(() => {
-    if (!profileId && shopsQuery.data?.[0])
-      setProfileId(shopsQuery.data[0].profile_id);
-  }, [profileId, shopsQuery.data]);
+  const responsibles = useMemo(() => {
+    const unique = new Map<string, { responsible_ref: string; label: string }>();
+    directoryQuery.data?.stores.forEach((store) => store.responsibles.forEach((person) => unique.set(person.responsible_ref, person)));
+    return [...unique.values()];
+  }, [directoryQuery.data]);
+  const stores = useMemo(() => directoryQuery.data?.stores.filter((store) => store.responsibles.some((person) => person.responsible_ref === responsibleRef)) ?? [], [directoryQuery.data, responsibleRef]);
+  const selectedStore = stores.find((store) => store.shop_ref === shopRef);
+  const products = selectedStore?.responsibles.find((person) => person.responsible_ref === responsibleRef)?.products ?? [];
+  useEffect(() => { if (!responsibles.some((item) => item.responsible_ref === responsibleRef)) { setResponsibleRef(""); setShopRef(""); setProductRef(""); } }, [responsibles, responsibleRef]);
+  useEffect(() => { if (!stores.some((item) => item.shop_ref === shopRef)) { setShopRef(""); setProductRef(""); } }, [stores, shopRef]);
+  useEffect(() => { if (!products.some((item) => item.product_ref === productRef)) setProductRef(""); }, [products, productRef]);
 
   useEffect(() => {
     if (!runId) return;
@@ -336,6 +381,7 @@ export function AdvertisingDiagnosticsWorkbench() {
       setTraceId(created.trace_id);
       setEvents([]);
       setResult(undefined);
+      setHistoryScope(undefined);
       setRunError(undefined);
       setConnected(false);
       void historyQuery.refetch();
@@ -372,6 +418,7 @@ export function AdvertisingDiagnosticsWorkbench() {
   const isRunning =
     createRun.isPending || Boolean(runId && !result && !runError);
   const runCompleted = Boolean(result);
+  const visibleWarnings = visibleDiagnosticWarnings(result?.warnings);
   const highPriorityCount =
     result?.anomalies.filter((item) =>
       ["high", "critical"].includes(item.severity),
@@ -397,18 +444,27 @@ export function AdvertisingDiagnosticsWorkbench() {
     },
     {
       label: "已覆盖店铺",
-      value: result ? 1 : "—",
-      hint: profileId
-        ? shopsQuery.data?.find((shop) => shop.profile_id === profileId)?.alias
-        : "选择巡检范围",
+      value: historyScope?.shop_label || selectedStore ? 1 : "—",
+      hint: historyScope?.shop_label ?? selectedStore?.label ?? "选择巡检范围",
       icon: Icons.product,
     },
   ];
 
   function startRun() {
-    if (!profileId || validationError) return;
+    if (!shopRef || !productRef || !directoryQuery.data || validationError) return;
+    // A new submission begins a distinct diagnostic view. Do not leave a
+    // previous run's failure banner visible while this request is starting.
+    setRunError(undefined);
+    setResult(undefined);
+    setEvents([]);
+    setRunId(undefined);
+    setTraceId(undefined);
+    setHistoryScope(undefined);
+    setConnected(false);
     createRun.mutate({
-      profile_ids: [profileId],
+      selection_version: directoryQuery.data.version,
+      shop_ref: shopRef,
+      product_refs: [productRef],
       current_period: { start: currentStart, end: currentEnd },
       ...(compareBaseline
         ? { baseline_period: { start: baselineStart, end: baselineEnd } }
@@ -427,38 +483,42 @@ export function AdvertisingDiagnosticsWorkbench() {
             默认只检查当前周期；需要识别趋势变化时可启用基准周期对比。
           </CardDescription>
           <CardAction>
-            <Badge variant={shopsQuery.isError ? "destructive" : "outline"}>
-              {shopsQuery.isLoading
+            <Badge variant={directoryQuery.isError ? "destructive" : "outline"}>
+              {directoryQuery.isLoading
                 ? "正在连接领星"
-                : shopsQuery.isError
+                : directoryQuery.isError
                   ? "领星连接失败"
-                  : `领星真实店铺 · ${shopsQuery.data?.length ?? 0}`}
+                  : `已授权选择目录 · ${directoryQuery.data?.stores.length ?? 0} 店铺`}
             </Badge>
           </CardAction>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(180px,1fr)_minmax(280px,1.5fr)_minmax(150px,0.8fr)_minmax(130px,0.7fr)]">
-            <ScopeField label="广告店铺">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <ScopeField label="负责人">
               <NativeSelect
                 className="w-full"
-                value={profileId}
-                disabled={shopsQuery.isLoading || isRunning}
-                onChange={(event) => setProfileId(event.target.value)}
+                value={responsibleRef}
+                disabled={directoryQuery.isLoading || isRunning}
+                onChange={(event) => setResponsibleRef(event.target.value)}
               >
                 <NativeSelectOption value="" disabled>
-                  {shopsQuery.isLoading
-                    ? "正在加载领星店铺"
-                    : "选择领星广告店铺"}
+                  {directoryQuery.isLoading ? "正在加载选择目录" : "选择负责人"}
                 </NativeSelectOption>
-                {shopsQuery.data?.map((shop) => (
-                  <NativeSelectOption
-                    key={shop.profile_id}
-                    value={shop.profile_id}
-                  >
-                    {shop.alias}
-                    {shop.country ? ` · ${shop.country}` : ""}
-                  </NativeSelectOption>
+                {responsibles.map((person) => (
+                  <NativeSelectOption key={person.responsible_ref} value={person.responsible_ref}>{person.label}</NativeSelectOption>
                 ))}
+              </NativeSelect>
+            </ScopeField>
+            <ScopeField label="广告店铺">
+              <NativeSelect className="w-full" value={shopRef} disabled={!responsibleRef || isRunning} onChange={(event) => setShopRef(event.target.value)}>
+                <NativeSelectOption value="" disabled>选择负责人名下店铺</NativeSelectOption>
+                {stores.map((store) => <NativeSelectOption key={store.shop_ref} value={store.shop_ref}>{store.label}</NativeSelectOption>)}
+              </NativeSelect>
+            </ScopeField>
+            <ScopeField label="父 ASIN">
+              <NativeSelect className="w-full" value={productRef} disabled={!shopRef || isRunning} onChange={(event) => setProductRef(event.target.value)}>
+                <NativeSelectOption value="" disabled>选择产品</NativeSelectOption>
+                {products.map((product) => <NativeSelectOption key={product.product_ref} value={product.product_ref}>{product.parent_asin}</NativeSelectOption>)}
               </NativeSelect>
             </ScopeField>
             <DateRangeField
@@ -500,9 +560,9 @@ export function AdvertisingDiagnosticsWorkbench() {
               <Button
                 className="w-full"
                 disabled={
-                  !profileId ||
+                  !responsibleRef || !shopRef || !productRef ||
                   Boolean(validationError) ||
-                  shopsQuery.isError ||
+                  directoryQuery.isError ||
                   isRunning
                 }
                 onClick={startRun}
@@ -576,13 +636,16 @@ export function AdvertisingDiagnosticsWorkbench() {
                       setEvents([]);
                       setRunError(record.error?.message);
                       setResult(record.result ?? undefined);
+                      setHistoryScope(record.display_scope ?? null);
                     }}
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">
-                        {record.result?.summary ?? record.error?.message ?? "巡检进行中"}
+                        {historyRunTitle(record)}
                       </p>
                       <p className="mt-1 font-mono text-xs text-muted-foreground">
+                        {historyRunDetail(record)}
+                        <span className="px-1">·</span>
                         {record.run_id.slice(0, 24)}…
                         {record.created_at
                           ? ` · ${new Date(record.created_at).toLocaleString("zh-CN")}`
@@ -621,21 +684,21 @@ export function AdvertisingDiagnosticsWorkbench() {
         </CardContent>
       </Card>
 
-      {(validationError || runError || shopsQuery.error) && (
+      {(validationError || runError || directoryQuery.error) && (
         <Alert variant="destructive">
           <Icons.warning />
           <AlertTitle>暂时无法运行巡检</AlertTitle>
           <AlertDescription>
             {validationError ??
               runError ??
-              (shopsQuery.error instanceof Error
-                ? shopsQuery.error.message
+              (directoryQuery.error instanceof Error
+                ? directoryQuery.error.message
                 : "无法加载领星店铺。")}
           </AlertDescription>
         </Alert>
       )}
 
-      {result?.warnings.map((warning, index) => (
+      {visibleWarnings.map((warning, index) => (
         <Alert key={`warning-${index}-${warning}`}>
           <Icons.info />
           <AlertTitle>巡检提示</AlertTitle>
@@ -728,9 +791,6 @@ export function AdvertisingDiagnosticsWorkbench() {
               </TabsTrigger>
               <TabsTrigger value="evidence">
                 证据记录 {result ? `(${result.evidence.length})` : ""}
-              </TabsTrigger>
-              <TabsTrigger value="signals">
-                归因信号 {result ? `(${result.llm_interpretations?.length ?? 0})` : ""}
               </TabsTrigger>
             </TabsList>
             <Separator />
@@ -955,39 +1015,6 @@ export function AdvertisingDiagnosticsWorkbench() {
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
-              )}
-            </TabsContent>
-            <TabsContent value="signals" className="pt-4">
-              {result?.llm_interpretations?.length ? (
-                <div className="space-y-3">
-                  {result.llm_interpretations.map((interpretation) => (
-                    <div
-                      key={`${interpretation.campaign_id}-${interpretation.anomaly_id}`}
-                      className="rounded-xl border p-4"
-                    >
-                      <p className="text-sm font-medium">
-                        活动 {interpretation.campaign_id} · 异常 {interpretation.anomaly_id}
-                      </p>
-                      {interpretation.cross_report_explanations.map((item) => (
-                        <p key={item} className="mt-2 text-sm leading-relaxed">{item}</p>
-                      ))}
-                      {interpretation.suspected_patterns.length > 0 && (
-                        <p className="mt-2 text-xs text-muted-foreground">
-                          结构性信号：{interpretation.suspected_patterns.join("；")}
-                        </p>
-                      )}
-                      {interpretation.missing_evidence.length > 0 && (
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          待补充：{interpretation.missing_evidence.join("；")}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="py-4 text-sm text-muted-foreground">
-                  尚无可展示的跨报告信号；这不会替代已验证归因结论。
-                </p>
               )}
             </TabsContent>
           </Tabs>

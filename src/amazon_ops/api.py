@@ -4,16 +4,20 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import RLock
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
+from urllib.parse import quote
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .deepseek_runtime import DeepSeekModelRoles, build_deepseek_model_roles
+from .llm import DeepSeekModelName, DeepSeekReasoningEffort
+from .graph import build_controller_graph
+from .interfaces import DeterministicAggregator
 from .events import (
     TERMINAL_EVENT_TYPES,
     InMemoryEventHub,
@@ -21,8 +25,6 @@ from .events import (
     StageEventType,
     StageName,
 )
-from .graph import build_controller_graph
-from .interfaces import SpecialistAgent
 from .idempotency import (
     IdempotencyConflictError,
     IdempotencyKeyError,
@@ -32,24 +34,31 @@ from .idempotency import (
     PostgresIdempotencyRegistry,
     request_fingerprint,
 )
-from .memory import InMemoryConversationStore
-from .models import SpecialistName
-from .listing import (
-    DeterministicListingValidator,
-    ListingSpecialistAgent,
-    ListingWorkflowServices,
-    build_keyword_research_gateway,
+from .memory import (
+    ConversationMemoryStorageError,
+    ConversationStore,
+    InMemoryConversationStore,
+    PostgresConversationStore,
+    summarize_conversation,
 )
-from .listing.mcp import mcp_trace_context
+from .nl2sql import NL2SQLError, NL2SQLService
+from .nl2sql_mcp_client import NL2SQLMCPClient
 from .advertising import (
     AdDiagnosticRequest,
     AdShop,
     AdvertisingRunManager,
     AdvertisingRunRecord,
+    ImportedAdvertisingReportSpecialist,
 )
+from .models import SpecialistName
 from .advertising.history import InMemoryAdvertisingRunHistoryStore, PostgresAdvertisingRunHistoryStore
+from .advertising.imports import AdvertisingImportService, ImportDataSummary, ImportResult, InMemoryImportStore, PostgresImportStore, ReportType
 from .sse import SSE_RESPONSE_HEADERS, stage_sse_stream
 from .auth import AuthStore, AuthUser, bearer_token, require_admin, require_user
+from .customs_declaration import CustomsDeclarationService, CustomsPreview
+from .customs_declaration.service import CustomsGenerationError, MAX_FILE_SIZE
+from .european_customs_declaration import EuropeanCustomsDeclarationService, EuropeanCustomsPreview
+from .european_customs_declaration.service import EuropeanCustomsGenerationError
 
 
 DEFAULT_DATABASE_URL = "postgresql://amazon_ops:amazon_ops@127.0.0.1:5432/amazon_ops"
@@ -75,6 +84,25 @@ def _uses_serverless_test_storage() -> bool:
     return os.getenv("VERCEL") == "1"
 
 
+class ImageAttachment(BaseModel):
+    """A small, in-request image used only by the selected vision model."""
+
+    data_url: str = Field(min_length=32, max_length=7_000_000)
+
+    @field_validator("data_url")
+    @classmethod
+    def validate_data_url(cls, value: str) -> str:
+        allowed_prefixes = (
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+            "data:image/gif;base64,",
+        )
+        if not value.startswith(allowed_prefixes):
+            raise ValueError("仅支持 PNG、JPEG、WebP 或 GIF 图片。")
+        return value
+
+
 class CreateRunRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
     conversation_id: str = Field(
@@ -85,12 +113,27 @@ class CreateRunRequest(BaseModel):
     )
     user_context: dict[str, Any] = Field(default_factory=dict)
     shop_directory: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    model: DeepSeekModelName | None = None
+    reasoning_effort: DeepSeekReasoningEffort | None = None
+    image_attachments: list[ImageAttachment] = Field(default_factory=list, max_length=4)
 
 
 class CreateRunResponse(BaseModel):
     run_id: str
     conversation_id: str
     status: str = "accepted"
+    model: DeepSeekModelName
+
+
+class ConversationSummaryResponse(BaseModel):
+    conversation_id: str
+    preview: str
+
+
+class ConversationMessageResponse(BaseModel):
+    role: str
+    content: str
+    kind: Literal["message", "summary"] = "message"
 
 
 class RunRecord(BaseModel):
@@ -144,60 +187,90 @@ class AgentRunManager:
         self,
         *,
         roles: DeepSeekModelRoles | None = None,
-        specialists: Mapping[str, SpecialistAgent] | None = None,
-        memory: InMemoryConversationStore | None = None,
+        memory: ConversationStore | None = None,
         max_workers: int = 4,
     ) -> None:
         self.roles = roles or build_deepseek_model_roles()
-        if specialists is None:
-            listing_services = ListingWorkflowServices(
-                researcher=build_keyword_research_gateway(),
-                copywriter=self.roles.listing_copywriter,
-                validator=DeterministicListingValidator(),
-            )
-            specialists = {
-                SpecialistName.LISTING_CONTENT.value: ListingSpecialistAgent(
-                    listing_services
-                )
-            }
-        self.specialists = dict(specialists)
-        self.memory = memory or InMemoryConversationStore(max_messages=20)
+        self._roles_by_model: dict[
+            tuple[DeepSeekModelName, DeepSeekReasoningEffort | None],
+            DeepSeekModelRoles,
+        ] = {
+            (self.roles.llm.config.model, self.roles.llm.config.reasoning_effort): self.roles
+        }
+        self.memory = memory or InMemoryConversationStore()
         self.hub = InMemoryEventHub()
         self.stages = StageController(self.hub)
-        self.graph = build_controller_graph(
-            interpreter=self.roles.request_interpreter,
-            specialists=self.specialists,
-            aggregator=self.roles.result_aggregator,
-            responder=self.roles.direct_responder,
-            stages=self.stages,
-        )
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="amazon-ops-run"
         )
         self._lock = RLock()
         self._runs: dict[str, RunRecord] = {}
         self._owners: dict[str, str | None] = {}
+        self.advertising_imports: AdvertisingImportService | None = None
+        self.nl2sql: Any | None = None
+        self.specialists: dict[str, Any] = self._specialists_for(self.roles)
+        self.graph = self._graph_for(self.roles)
+
+    def _specialists_for(self, roles: DeepSeekModelRoles) -> dict[str, Any]:
+        return {
+            SpecialistName.ADVERTISING.value: ImportedAdvertisingReportSpecialist(
+                lambda: self.nl2sql,
+                lambda: roles.advertising_react_model,
+            )
+        }
+
+    def _graph_for(self, roles: DeepSeekModelRoles) -> Any:
+        return build_controller_graph(
+            interpreter=roles.request_interpreter,
+            specialists=self._specialists_for(roles),
+            aggregator=DeterministicAggregator(),
+            responder=roles.direct_responder,
+            stages=self.stages,
+        )
+
+    def _roles_for(
+        self,
+        model: DeepSeekModelName,
+        reasoning_effort: DeepSeekReasoningEffort | None = None,
+    ) -> DeepSeekModelRoles:
+        key = (model, reasoning_effort)
+        with self._lock:
+            selected = self._roles_by_model.get(key)
+            if selected is None:
+                selected = build_deepseek_model_roles(
+                    model=model, reasoning_effort=reasoning_effort
+                )
+                self._roles_by_model[key] = selected
+            return selected
 
     def submit(self, request: CreateRunRequest, *, owner_id: str | None = None) -> str:
+        selected_model = request.model or self.roles.llm.config.model
+        if request.image_attachments and selected_model != "deepseek-v4-flash-vision-exp":
+            raise ValueError("图片分析请使用 Vision（看图）模型。")
+        selected_effort = request.reasoning_effort
+        roles = self._roles_for(selected_model, selected_effort)
+        graph = self.graph if roles is self.roles else self._graph_for(roles)
         run_id = f"run-{uuid4().hex}"
         record = RunRecord(run_id=run_id, status="running")
         with self._lock:
             self._runs[run_id] = record
             self._owners[run_id] = owner_id
-        previous_messages = self.memory.history(request.conversation_id)
+        previous_messages = self.memory.history(owner_id, request.conversation_id)
         current_message = {"role": "user", "content": request.message}
         self.memory.append(
-            request.conversation_id, role="user", content=request.message
+            owner_id, request.conversation_id, role="user", content=request.message, turn_id=run_id
         )
         state = {
             "request_id": run_id,
+            "owner_id": owner_id,
             "messages": [*previous_messages, current_message],
             "user_context": request.user_context,
+            "image_attachments": [item.data_url for item in request.image_attachments],
             "shop_directory": request.shop_directory,
             "system_capabilities": {
                 "llm": {
                     "provider": "deepseek",
-                    "model": self.roles.llm.config.model,
+                    "model": selected_model,
                     "configured": bool(
                         os.getenv(self.roles.llm.config.api_key_env, "").strip()
                     ),
@@ -213,11 +286,9 @@ class AgentRunManager:
                         "configured": bool(os.getenv("SIF_MCP_SECRET", "").strip()),
                         "purpose": "关键词、流量和 Listing 关键词分布验证",
                     },
-                    "lingxing": {
-                        "configured": bool(
-                            os.getenv("LINGXING_MCP_SECRET", "").strip()
-                        ),
-                        "purpose": "店铺经营、商品、广告、库存和利润数据",
+                    "imported_advertising_reports": {
+                        "configured": self.nl2sql is not None,
+                        "purpose": "团队共享已导入广告报表的只读查询",
                     },
                 },
                 "agents": {
@@ -227,7 +298,7 @@ class AgentRunManager:
             },
             "current_time": datetime.now(timezone.utc).isoformat(),
         }
-        self._executor.submit(self._execute, run_id, request.conversation_id, state)
+        self._executor.submit(self._execute, run_id, request.conversation_id, state, owner_id, graph, roles)
         return run_id
 
     def get(self, run_id: str, *, owner_id: str | None = None) -> RunRecord | None:
@@ -254,22 +325,41 @@ class AgentRunManager:
                 ),
             },
             "memory": {
-                "type": "in_memory",
-                "max_messages": self.memory.max_messages,
+                "type": self.memory.health()["backend"],
+                "max_turns": self.memory.max_turns,
                 "conversation_count": self.memory.count(),
             },
         }
 
     def _execute(
-        self, run_id: str, conversation_id: str, state: dict[str, Any]
+        self,
+        run_id: str,
+        conversation_id: str,
+        state: dict[str, Any],
+        owner_id: str | None,
+        graph: Any,
+        roles: DeepSeekModelRoles,
     ) -> None:
         try:
-            with mcp_trace_context(run_id=run_id):
-                result = self.graph.invoke(state)
+            result = graph.invoke(state)
             final_response = result.get("final_response") or {}
             answer = final_response.get("answer")
             if isinstance(answer, str):
-                self.memory.append(conversation_id, role="assistant", content=answer)
+                self.memory.append(
+                    owner_id, conversation_id, role="assistant", content=answer, turn_id=run_id
+                )
+                try:
+                    self.memory.compact(
+                        owner_id,
+                        conversation_id,
+                        lambda previous, messages: summarize_conversation(
+                            roles.llm, previous, messages
+                        ),
+                    )
+                except ConversationMemoryStorageError:
+                    # A completed answer remains valid even when best-effort
+                    # background compaction is temporarily unavailable.
+                    pass
             record = RunRecord(
                 run_id=run_id,
                 status=(
@@ -324,11 +414,28 @@ def create_app(
     advertising_manager: AdvertisingRunManager | None = None,
     idempotency_registry: IdempotencyRegistry | None = None,
     auth_store: AuthStore | None = None,
+    advertising_import_service: AdvertisingImportService | None = None,
+    customs_declaration_service: CustomsDeclarationService | None = None,
+    european_customs_declaration_service: EuropeanCustomsDeclarationService | None = None,
 ) -> FastAPI:
-    runtime = manager or AgentRunManager()
-    shared_llm = getattr(getattr(runtime, "roles", None), "llm", None)
     serverless_test_storage = _uses_serverless_test_storage()
     database_url = _env_text("DATABASE_URL", DEFAULT_DATABASE_URL)
+    runtime = manager or AgentRunManager(
+        memory=(
+            InMemoryConversationStore(
+                max_turns=_env_int("CONVERSATION_MEMORY_MAX_TURNS", 30),
+                compact_turns=_env_int("CONVERSATION_MEMORY_COMPACT_TURNS", 20),
+            )
+            if serverless_test_storage
+            else PostgresConversationStore(
+                database_url,
+                max_turns=_env_int("CONVERSATION_MEMORY_MAX_TURNS", 30),
+                compact_turns=_env_int("CONVERSATION_MEMORY_COMPACT_TURNS", 20),
+                max_pool_size=_env_int("CONVERSATION_MEMORY_DB_POOL_SIZE", 10),
+            )
+        )
+    )
+    shared_llm = getattr(getattr(runtime, "roles", None), "llm", None)
     advertising_runtime = advertising_manager or AdvertisingRunManager(
         llm=shared_llm,
         history_store=(
@@ -352,11 +459,27 @@ def create_app(
     auth = auth_store or AuthStore(
         database_url, max_pool_size=_env_int("AUTH_DB_POOL_SIZE", 10)
     )
+    advertising_imports = advertising_import_service or AdvertisingImportService(
+        InMemoryImportStore() if serverless_test_storage else PostgresImportStore(database_url)
+    )
+    customs_declarations = customs_declaration_service or CustomsDeclarationService()
+    european_customs_declarations = (
+        european_customs_declaration_service or EuropeanCustomsDeclarationService()
+    )
+    runtime.advertising_imports = advertising_imports
+    runtime.nl2sql = (
+        NL2SQLMCPClient()
+        if shared_llm and NL2SQLService.from_env(shared_llm) is not None
+        else None
+    )
     app = FastAPI(title="Amazon Ops Agent API", version="0.1.0")
     app.state.run_manager = runtime
     app.state.advertising_run_manager = advertising_runtime
     app.state.idempotency_registry = idempotency
     app.state.auth_store = auth
+    app.state.advertising_import_service = advertising_imports
+    app.state.customs_declaration_service = customs_declarations
+    app.state.european_customs_declaration_service = european_customs_declarations
     start_advertising_recovery = getattr(advertising_runtime, "start_recovery_monitor", None)
     if callable(start_advertising_recovery) and not serverless_test_storage:
         # Durable tasks retain their original identifiers; recovery only claims
@@ -365,6 +488,9 @@ def create_app(
     close_idempotency = getattr(idempotency, "close", None)
     if callable(close_idempotency):
         app.router.add_event_handler("shutdown", close_idempotency)
+    close_memory = getattr(getattr(runtime, "memory", None), "close", None)
+    if callable(close_memory):
+        app.router.add_event_handler("shutdown", close_memory)
     close_ad_history = getattr(getattr(advertising_runtime, "history_store", None), "close", None)
     if callable(close_ad_history):
         app.router.add_event_handler("shutdown", close_ad_history)
@@ -372,6 +498,7 @@ def create_app(
     if callable(close_advertising):
         app.router.add_event_handler("shutdown", close_advertising)
     app.router.add_event_handler("shutdown", auth.close)
+    app.router.add_event_handler("shutdown", advertising_imports.store.close)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3001", "http://127.0.0.1:3001"],
@@ -406,7 +533,13 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        payload = runtime.health()
+        try:
+            payload = runtime.health()
+        except ConversationMemoryStorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="PostgreSQL 会话记忆存储不可用。",
+            ) from exc
         try:
             payload["idempotency"] = idempotency.health()
         except IdempotencyStorageError as exc:
@@ -492,6 +625,15 @@ def create_app(
         idempotency_key: str = Header(alias="Idempotency-Key"),
     ) -> CreateRunResponse:
         user = require_user(raw_request)
+        if (
+            request.image_attachments
+            and (request.model or runtime.roles.llm.config.model)
+            != "deepseek-v4-flash-vision-exp"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="图片分析请使用 Vision（看图）模型。",
+            )
         fingerprint_payload = request.model_dump(mode="json")
         if "conversation_id" not in request.model_fields_set:
             fingerprint_payload["conversation_id"] = "__server_generated__"
@@ -503,6 +645,7 @@ def create_app(
                 factory=lambda: CreateRunResponse(
                     run_id=runtime.submit(request, owner_id=user.id),
                     conversation_id=request.conversation_id,
+                    model=request.model or runtime.roles.llm.config.model,
                 ),
             )
         except IdempotencyKeyError as exc:
@@ -527,6 +670,48 @@ def create_app(
         if record is None:
             raise HTTPException(status_code=404, detail="run not found")
         return record
+
+    @app.get("/api/conversations", response_model=list[ConversationSummaryResponse])
+    def list_conversations(raw_request: Request) -> list[ConversationSummaryResponse]:
+        try:
+            return [
+                ConversationSummaryResponse.model_validate(item)
+                for item in runtime.memory.conversations(require_user(raw_request).id)
+            ]
+        except ConversationMemoryStorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="PostgreSQL 会话记忆存储不可用。",
+            ) from exc
+
+    @app.get(
+        "/api/conversations/{conversation_id}/messages",
+        response_model=list[ConversationMessageResponse],
+    )
+    def get_conversation_messages(
+        conversation_id: str, raw_request: Request
+    ) -> list[ConversationMessageResponse]:
+        try:
+            return [
+                ConversationMessageResponse.model_validate(item)
+                for item in runtime.memory.history(require_user(raw_request).id, conversation_id)
+            ]
+        except ConversationMemoryStorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="PostgreSQL 会话记忆存储不可用。",
+            ) from exc
+
+    @app.delete("/api/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_conversation(conversation_id: str, raw_request: Request) -> Response:
+        try:
+            runtime.memory.clear(require_user(raw_request).id, conversation_id)
+        except ConversationMemoryStorageError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="PostgreSQL 会话记忆存储不可用。",
+            ) from exc
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(
@@ -556,6 +741,17 @@ def create_app(
                 detail=advertising_runtime._safe_error_message(exc),
             ) from exc
 
+    @app.get("/api/ad-diagnostics/selection-directory")
+    def advertising_selection_directory(raw_request: Request) -> dict[str, Any]:
+        user = require_user(raw_request)
+        try:
+            return advertising_runtime.selection_directory(owner_id=user.id)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=advertising_runtime._safe_error_message(exc),
+            ) from exc
+
     @app.post(
         "/api/ad-diagnostics/runs",
         response_model=CreateAdvertisingRunResponse,
@@ -568,9 +764,15 @@ def create_app(
         idempotency_key: str = Header(alias="Idempotency-Key"),
     ) -> CreateAdvertisingRunResponse:
         user = require_user(raw_request)
+        try:
+            request, execution_scope = advertising_runtime.resolve_selection(request, owner_id=user.id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="所选诊断范围无权限。") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         def submit_run() -> CreateAdvertisingRunResponse:
             owner_id = user.id
-            run_id = advertising_runtime.submit(request, owner_id=owner_id)
+            run_id = advertising_runtime.submit(request, owner_id=owner_id, execution_scope=execution_scope)
             record = advertising_runtime.get(run_id, owner_id=owner_id)
             if record is None:
                 raise RuntimeError("广告巡检任务未能初始化")
@@ -601,6 +803,108 @@ def create_app(
         response.headers["Idempotency-Key"] = idempotency_key
         response.headers["Idempotency-Replayed"] = str(resolution.replayed).lower()
         return CreateAdvertisingRunResponse.model_validate(resolution.value)
+
+    @app.get("/api/ad-report-imports/templates/{report_type}")
+    def advertising_import_template(report_type: ReportType, raw_request: Request) -> Response:
+        require_user(raw_request)
+        return Response(content=advertising_imports.template(report_type), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{report_type.value}-template.csv"'})
+
+    @app.post("/api/ad-report-imports", response_model=ImportResult)
+    async def import_advertising_report(raw_request: Request, report_type: ReportType | None = Form(default=None), file: UploadFile = File()) -> ImportResult:
+        user = require_user(raw_request)
+        try:
+            return advertising_imports.import_file(uploaded_by=user.id, report_type=report_type, file_name=file.filename or "", content=await file.read(20 * 1024 * 1024 + 1))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="广告报表导入服务暂时不可用，请稍后重试。") from exc
+
+    @app.post("/api/customs-declarations/preview", response_model=CustomsPreview)
+    async def preview_customs_declarations(
+        raw_request: Request,
+        shipment_file: UploadFile = File(),
+        fba_file: UploadFile = File(),
+    ) -> CustomsPreview:
+        require_user(raw_request)
+        return customs_declarations.preview(
+            shipment_file_name=shipment_file.filename or "",
+            shipment_content=await shipment_file.read(MAX_FILE_SIZE + 1),
+            fba_file_name=fba_file.filename or "",
+            fba_content=await fba_file.read(MAX_FILE_SIZE + 1),
+        )
+
+    @app.post("/api/customs-declarations/generate")
+    async def generate_customs_declarations(
+        raw_request: Request,
+        shipment_file: UploadFile = File(),
+        fba_file: UploadFile = File(),
+    ) -> Response:
+        require_user(raw_request)
+        try:
+            file_name, payload = customs_declarations.generate(
+                shipment_file_name=shipment_file.filename or "",
+                shipment_content=await shipment_file.read(MAX_FILE_SIZE + 1),
+                fba_file_name=fba_file.filename or "",
+                fba_content=await fba_file.read(MAX_FILE_SIZE + 1),
+            )
+        except CustomsGenerationError as exc:
+            return Response(
+                content=exc.preview.model_dump_json(),
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                media_type="application/json",
+            )
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename=customs-declarations.zip; "
+                    f"filename*=UTF-8''{quote(file_name)}"
+                )
+            },
+        )
+
+    @app.post("/api/european-customs-declarations/preview", response_model=EuropeanCustomsPreview)
+    async def preview_european_customs_declarations(
+        raw_request: Request, file: UploadFile = File()
+    ) -> EuropeanCustomsPreview:
+        require_user(raw_request)
+        return european_customs_declarations.preview(
+            file_name=file.filename or "",
+            content=await file.read(MAX_FILE_SIZE + 1),
+        )
+
+    @app.post("/api/european-customs-declarations/generate")
+    async def generate_european_customs_declarations(
+        raw_request: Request, file: UploadFile = File()
+    ) -> Response:
+        require_user(raw_request)
+        try:
+            file_name, payload = european_customs_declarations.generate(
+                file_name=file.filename or "",
+                content=await file.read(MAX_FILE_SIZE + 1),
+            )
+        except EuropeanCustomsGenerationError as exc:
+            return Response(
+                content=exc.preview.model_dump_json(),
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                media_type="application/json",
+            )
+        return Response(
+            content=payload,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    "attachment; filename=european-customs-declarations.zip; "
+                    f"filename*=UTF-8''{quote(file_name)}"
+                )
+            },
+        )
+
+    @app.get("/api/ad-report-imports/summary", response_model=ImportDataSummary)
+    def advertising_import_summary(raw_request: Request) -> ImportDataSummary:
+        require_user(raw_request)
+        return ImportDataSummary.model_validate(advertising_imports.store.query_shared_summary())
 
     @app.get(
         "/api/ad-diagnostics/history",

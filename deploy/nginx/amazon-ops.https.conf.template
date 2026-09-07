@@ -21,6 +21,8 @@ server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name __APP_DOMAIN__;
+    # Customs declarations accept two XLSX files of up to 20 MiB each.
+    client_max_body_size 50m;
 
     ssl_certificate /etc/letsencrypt/live/__APP_DOMAIN__/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/__APP_DOMAIN__/privkey.pem;

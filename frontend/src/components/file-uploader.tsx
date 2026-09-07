@@ -87,6 +87,9 @@ export interface FileUploaderProps extends React.HTMLAttributes<HTMLDivElement> 
    * @example disabled
    */
   disabled?: boolean;
+
+  /** Show an icon-only compact dropzone. */
+  compact?: boolean;
 }
 
 export function FileUploader(props: FileUploaderProps) {
@@ -100,6 +103,7 @@ export function FileUploader(props: FileUploaderProps) {
     maxFiles = 1,
     multiple = false,
     disabled = false,
+    compact = false,
     className,
     ...dropzoneProps
   } = props;
@@ -207,11 +211,11 @@ export function FileUploader(props: FileUploaderProps) {
                 <p className='text-muted-foreground font-medium'>Drop the files here</p>
               </div>
             ) : (
-              <div className='flex flex-col items-center justify-center gap-4 sm:px-5'>
+              <div className={cn('flex flex-col items-center justify-center gap-4 sm:px-5', compact && 'gap-0')}>
                 <div className='rounded-full border border-dashed p-3'>
                   <Icons.upload className='text-muted-foreground size-7' aria-hidden='true' />
                 </div>
-                <div className='space-y-px'>
+                {!compact && <div className='space-y-px'>
                   <p className='text-muted-foreground font-medium'>
                     Drag {`'n'`} drop files here, or click to select files
                   </p>
@@ -222,7 +226,7 @@ export function FileUploader(props: FileUploaderProps) {
                       files (up to ${formatBytes(maxSize)} each)`
                       : ` a file with ${formatBytes(maxSize)}`}
                   </p>
-                </div>
+                </div>}
               </div>
             )}
           </div>

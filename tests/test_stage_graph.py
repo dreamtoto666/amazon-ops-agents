@@ -67,6 +67,19 @@ class NeedsInputSpecialist:
         )
 
 
+class FailedSpecialist:
+    name = SpecialistName.ADVERTISING.value
+
+    def invoke(self, task, scope, state):
+        return SpecialistResult(
+            task_id=task.task_id,
+            agent=SpecialistName.ADVERTISING,
+            status="failed",
+            summary="广告报表查询未成功完成，系统未读取任何广告数据，因此无法给出可靠结论。请稍后重试。",
+            errors=[{"code": "AD_REPORT_QUERY_FAILED"}],
+        )
+
+
 def test_controller_graph_emits_analysis_verification_and_synthesis_stages():
     understanding = UnderstandRequestResult(
         intent=UserIntent(domain=Domain.STORE, action=Action.DIAGNOSE, confidence=0.95),
@@ -198,3 +211,26 @@ def test_controller_waits_when_listing_agent_needs_product_information():
     assert terminal.stage == StageName.WAITING_INPUT
     assert unit_events == ["unit.started", "unit.waiting"]
     assert "商品材质" in result["final_response"]["answer"]
+
+
+def test_controller_marks_the_run_failed_when_every_specialist_fails():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.98),
+        scope=QueryScope(),
+        route=RequestRoute.EXECUTE,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="查询广告花费最高的广告",
+    )
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={SpecialistName.ADVERTISING.value: FailedSpecialist()},
+        stages=StageController(hub),
+    )
+
+    result = graph.invoke({"messages": [], "request_id": "stage-advertising-failed"})
+    terminal = hub.events_after("stage-advertising-failed")[-1]
+
+    assert result["final_response"]["answer"].startswith("广告报表查询未成功完成")
+    assert terminal.event == StageEventType.RUN_FAILED
+    assert terminal.data["error"] == result["final_response"]["answer"]

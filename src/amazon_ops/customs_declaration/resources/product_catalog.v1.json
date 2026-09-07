@@ -1,0 +1,1170 @@
+{
+  "version": 1,
+  "source": "数据表.xls Sheet1 + confirmed material mapping",
+  "products": [
+    {
+      "id": "product-001",
+      "skus": [
+        "F00014",
+        "F00020"
+      ],
+      "standard_name": "挡水条0.8m",
+      "unit_weight": "0.1",
+      "unit_price_35": "3.5",
+      "declaration_name": "挡水条",
+      "model": "0.8mX2cmX1.2cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-002",
+      "skus": [
+        "F00352",
+        "F00355"
+      ],
+      "standard_name": "挡水条1m",
+      "unit_weight": "0.125",
+      "unit_price_35": "4.2",
+      "declaration_name": "挡水条",
+      "model": "1mX2cmX1.2cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-003",
+      "skus": [
+        "F00002",
+        "F00021"
+      ],
+      "standard_name": "挡水条1.5m",
+      "unit_weight": "0.2",
+      "unit_price_35": "5.5",
+      "declaration_name": "挡水条",
+      "model": "1.5mX2cmX1.2cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-004",
+      "skus": [
+        "F00004",
+        "F00023"
+      ],
+      "standard_name": "挡水条2.5m",
+      "unit_weight": "0.3",
+      "unit_price_35": "7.7",
+      "declaration_name": "挡水条",
+      "model": "2.5mX2cmX1.2cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-005",
+      "skus": [
+        "F00005",
+        "F00024"
+      ],
+      "standard_name": "挡水条3.5m",
+      "unit_weight": "0.45",
+      "unit_price_35": "9.45",
+      "declaration_name": "挡水条",
+      "model": "3.5mX2cmX1.2cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-006",
+      "skus": [
+        "F00398",
+        "F00399"
+      ],
+      "standard_name": "D形门窗密封条3m",
+      "unit_weight": "0.1",
+      "unit_price_35": "3",
+      "declaration_name": "D形门窗密封条",
+      "model": "3mX6mmX9mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-007",
+      "skus": [
+        "F00040",
+        "F00041"
+      ],
+      "standard_name": "D形门窗密封条5m",
+      "unit_weight": "0.15",
+      "unit_price_35": "3.05",
+      "declaration_name": "D形门窗密封条",
+      "model": "5mX6mmX9mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-008",
+      "skus": [
+        "F00037",
+        "F00038",
+        "F00039"
+      ],
+      "standard_name": "D形门窗密封条7m",
+      "unit_weight": "0.2",
+      "unit_price_35": "4.9",
+      "declaration_name": "D形门窗密封条",
+      "model": "7mX6mmX9mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-009",
+      "skus": [
+        "F00027",
+        "F00028",
+        "F00029"
+      ],
+      "standard_name": "D形门窗密封条10m",
+      "unit_weight": "0.3",
+      "unit_price_35": "6.5",
+      "declaration_name": "D形门窗密封条",
+      "model": "10mX6mmX9mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-010",
+      "skus": [
+        "F00030",
+        "F00031",
+        "F00042"
+      ],
+      "standard_name": "D形门窗密封条12m",
+      "unit_weight": "0.35",
+      "unit_price_35": "7.5",
+      "declaration_name": "D形门窗密封条",
+      "model": "12mX6mmX9mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-011",
+      "skus": [
+        "F00032",
+        "F00033",
+        "F00034"
+      ],
+      "standard_name": "D形门窗密封条15m",
+      "unit_weight": "0.45",
+      "unit_price_35": "9.8",
+      "declaration_name": "D形门窗密封条",
+      "model": "15mX6mmX9mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-012",
+      "skus": [
+        "F00520",
+        "F00518"
+      ],
+      "standard_name": "D形门窗密封条10*10mm-6m",
+      "unit_weight": "0.25",
+      "unit_price_35": "6.5",
+      "declaration_name": "D形门窗密封条",
+      "model": "6mX10mmX10mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-013",
+      "skus": [
+        "F00521",
+        "F00519"
+      ],
+      "standard_name": "D形门窗密封条10*10mm-10m",
+      "unit_weight": "0.4",
+      "unit_price_35": "9",
+      "declaration_name": "D形门窗密封条",
+      "model": "10mX10mmX10mm",
+      "material": "TPE",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-014",
+      "skus": [
+        "F00441"
+      ],
+      "standard_name": "发泡形车用密封条10x10mm-3m",
+      "unit_weight": "0.15",
+      "unit_price_35": "3.85",
+      "declaration_name": "发泡形车用密封条",
+      "model": "3mX10mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-015",
+      "skus": [
+        "F00442"
+      ],
+      "standard_name": "发泡形车用密封条10x10mm-6m",
+      "unit_weight": "0.2",
+      "unit_price_35": "5.6",
+      "declaration_name": "发泡形车用密封条",
+      "model": "6mX10mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-016",
+      "skus": [
+        "F00443"
+      ],
+      "standard_name": "发泡形车用密封条10x10mm-12m",
+      "unit_weight": "0.4",
+      "unit_price_35": "8.75",
+      "declaration_name": "发泡形车用密封条",
+      "model": "12mX10mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-017",
+      "skus": [
+        "F00444"
+      ],
+      "standard_name": "发泡形车用密封条15x15mm-3m",
+      "unit_weight": "0.2",
+      "unit_price_35": "5.25",
+      "declaration_name": "发泡形车用密封条",
+      "model": "3mX15mmX15mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-018",
+      "skus": [
+        "F00445"
+      ],
+      "standard_name": "发泡形车用密封条15x15mm-6m",
+      "unit_weight": "0.4",
+      "unit_price_35": "7.35",
+      "declaration_name": "发泡形车用密封条",
+      "model": "6mX15mmX15mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-019",
+      "skus": [
+        "F00446"
+      ],
+      "standard_name": "发泡形车用密封条15x15mm-12m",
+      "unit_weight": "0.8",
+      "unit_price_35": "12.25",
+      "declaration_name": "发泡形车用密封条",
+      "model": "12mX15mmX15mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-020",
+      "skus": [
+        "F00447"
+      ],
+      "standard_name": "发泡形车用密封条19x19mm-3m",
+      "unit_weight": "0.3",
+      "unit_price_35": "8.05",
+      "declaration_name": "发泡形车用密封条",
+      "model": "3mX19mmX19mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-021",
+      "skus": [
+        "F00448"
+      ],
+      "standard_name": "发泡形车用密封条19x19mm-6m",
+      "unit_weight": "0.6",
+      "unit_price_35": "12.25",
+      "declaration_name": "发泡形车用密封条",
+      "model": "6mX19mmX19mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-022",
+      "skus": [
+        "F00449"
+      ],
+      "standard_name": "发泡形车用密封条19x19mm-12m",
+      "unit_weight": "1.2",
+      "unit_price_35": "22.75",
+      "declaration_name": "发泡形车用密封条",
+      "model": "12mX19mmX19mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-023",
+      "skus": [
+        "F00388",
+        "F00577"
+      ],
+      "standard_name": "五孔形车用密封条5.03m",
+      "unit_weight": "0.25",
+      "unit_price_35": "3.15",
+      "declaration_name": "五孔形车用密封条",
+      "model": "5.03m",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-024",
+      "skus": [
+        "F00389",
+        "F00578"
+      ],
+      "standard_name": "五孔形车用密封条10.36m",
+      "unit_weight": "0.35",
+      "unit_price_35": "5.25",
+      "declaration_name": "五孔形车用密封条",
+      "model": "10.36m",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-025",
+      "skus": [
+        "F00390",
+        "F00579"
+      ],
+      "standard_name": "五孔形车用密封条16.4m",
+      "unit_weight": "0.45",
+      "unit_price_35": "7.35",
+      "declaration_name": "五孔形车用密封条",
+      "model": "16.4m",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-026",
+      "skus": [
+        "F00391",
+        "F00580"
+      ],
+      "standard_name": "五孔形车用密封条21.5m",
+      "unit_weight": "0.6",
+      "unit_price_35": "9.1",
+      "declaration_name": "五孔形车用密封条",
+      "model": "21.5m",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-027",
+      "skus": [
+        "F00420",
+        "F00581"
+      ],
+      "standard_name": "五孔形车用密封条26.5m",
+      "unit_weight": "0.85",
+      "unit_price_35": "10.5",
+      "declaration_name": "五孔形车用密封条",
+      "model": "26.5m",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-028",
+      "skus": [
+        "F00434"
+      ],
+      "standard_name": "六孔形车用密封条5.12m",
+      "unit_weight": "0.25",
+      "unit_price_35": "5.8",
+      "declaration_name": "六孔形车用密封条",
+      "model": "5.12mX11mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-029",
+      "skus": [
+        "F00435"
+      ],
+      "standard_name": "六孔形车用密封条10.36m",
+      "unit_weight": "0.5",
+      "unit_price_35": "9.1",
+      "declaration_name": "六孔形车用密封条",
+      "model": "10.36mX11mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-030",
+      "skus": [
+        "F00436"
+      ],
+      "standard_name": "六孔形车用密封条16.4m",
+      "unit_weight": "0.8",
+      "unit_price_35": "11.55",
+      "declaration_name": "六孔形车用密封条",
+      "model": "16.4mX11mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-031",
+      "skus": [
+        "F00437"
+      ],
+      "standard_name": "六孔形车用密封条21.5m",
+      "unit_weight": "1.05",
+      "unit_price_35": "13.65",
+      "declaration_name": "六孔形车用密封条",
+      "model": "21.5mX11mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-032",
+      "skus": [
+        "F00438"
+      ],
+      "standard_name": "六孔形车用密封条26.5m",
+      "unit_weight": "1.25",
+      "unit_price_35": "15.75",
+      "declaration_name": "六孔形车用密封条",
+      "model": "26.5mX11mmX10mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-033",
+      "skus": [
+        "F00499"
+      ],
+      "standard_name": "车库门密封条套装2.44m",
+      "unit_weight": "1.6",
+      "unit_price_35": "17.1",
+      "declaration_name": "车库门密封条套装",
+      "model": "2.44mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-034",
+      "skus": [
+        "F00385"
+      ],
+      "standard_name": "车库门密封条套装3.1m",
+      "unit_weight": "2",
+      "unit_price_35": "20.4",
+      "declaration_name": "车库门密封条套装",
+      "model": "3.1mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-035",
+      "skus": [
+        "F00386"
+      ],
+      "standard_name": "车库门密封条套装5.03m",
+      "unit_weight": "3.1",
+      "unit_price_35": "26.45",
+      "declaration_name": "车库门密封条套装",
+      "model": "5.03mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-036",
+      "skus": [
+        "F00500"
+      ],
+      "standard_name": "车库门密封条套装5.49m",
+      "unit_weight": "3.35",
+      "unit_price_35": "24.45",
+      "declaration_name": "车库门密封条套装",
+      "model": "5.49mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-037",
+      "skus": [
+        "F00387"
+      ],
+      "standard_name": "车库门密封条套装6.10m",
+      "unit_weight": "3.7",
+      "unit_price_35": "28.5",
+      "declaration_name": "车库门密封条套装",
+      "model": "6.10mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-038",
+      "skus": [
+        "F00481"
+      ],
+      "standard_name": "车库门密封条3.1m",
+      "unit_weight": "0.95",
+      "unit_price_35": "10.5",
+      "declaration_name": "车库门密封条",
+      "model": "3.1mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-039",
+      "skus": [
+        "F00482"
+      ],
+      "standard_name": "车库门密封条5.03m",
+      "unit_weight": "1.5",
+      "unit_price_35": "14.65",
+      "declaration_name": "车库门密封条",
+      "model": "5.03mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-040",
+      "skus": [
+        "F00483"
+      ],
+      "standard_name": "车库门密封条6.1m",
+      "unit_weight": "1.8",
+      "unit_price_35": "16.3",
+      "declaration_name": "车库门密封条",
+      "model": "6.1mX4cm",
+      "material": "EPDM",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-041",
+      "skus": [
+        "F00496"
+      ],
+      "standard_name": "眼睛形车用密封条5m",
+      "unit_weight": "0.8",
+      "unit_price_35": "6.3",
+      "declaration_name": "眼睛形车用密封条",
+      "model": "5mX4cmX1.5cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-042",
+      "skus": [
+        "F00439"
+      ],
+      "standard_name": "眼睛形车用密封条7.6m",
+      "unit_weight": "1.25",
+      "unit_price_35": "8.75",
+      "declaration_name": "眼睛形车用密封条",
+      "model": "7.6mX4cmX1.5cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-043",
+      "skus": [
+        "F00440"
+      ],
+      "standard_name": "眼睛形车用密封条12.13m",
+      "unit_weight": "1.9",
+      "unit_price_35": "10.85",
+      "declaration_name": "眼睛形车用密封条",
+      "model": "12.13mX4cmX1.5cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-044",
+      "skus": [
+        "F00526",
+        "F00539"
+      ],
+      "standard_name": "车库门侧密封条7m",
+      "unit_weight": "0.9",
+      "unit_price_35": "8.4",
+      "declaration_name": "车库门侧密封条",
+      "model": "7mX5.5cm",
+      "material": "TPE",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-045",
+      "skus": [
+        "F00494",
+        "F00495"
+      ],
+      "standard_name": "车库门侧密封条10.98m",
+      "unit_weight": "1.35",
+      "unit_price_35": "10.15",
+      "declaration_name": "车库门侧密封条",
+      "model": "10.98mX5.5cm",
+      "material": "TPE",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-046",
+      "skus": [
+        "F00524",
+        "F00525"
+      ],
+      "standard_name": "车库门侧密封条12.15m",
+      "unit_weight": "1.5",
+      "unit_price_35": "11.55",
+      "declaration_name": "车库门侧密封条",
+      "model": "12.15mX5.5cm",
+      "material": "TPE",
+      "usage": "车库门密封"
+    },
+    {
+      "id": "product-047",
+      "skus": [
+        "F00460",
+        "F00561"
+      ],
+      "standard_name": "墙角保护条2cm-3.3m",
+      "unit_weight": "0.1",
+      "unit_price_35": "4.45",
+      "declaration_name": "墙角保护条",
+      "model": "2cm-3.3m",
+      "material": "TPE",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-048",
+      "skus": [
+        "F00459"
+      ],
+      "standard_name": "墙角保护条2cm-6.1m",
+      "unit_weight": "0.25",
+      "unit_price_35": "5.3",
+      "declaration_name": "墙角保护条",
+      "model": "2cm-6.1m",
+      "material": "TPE",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-049",
+      "skus": [
+        "F00458"
+      ],
+      "standard_name": "墙角保护条4cm-3.3m",
+      "unit_weight": "0.25",
+      "unit_price_35": "5.3",
+      "declaration_name": "墙角保护条",
+      "model": "4cm-3.3m",
+      "material": "TPE",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-050",
+      "skus": [
+        "F00457",
+        "F00562"
+      ],
+      "standard_name": "墙角保护条4cm-6.1m",
+      "unit_weight": "0.45",
+      "unit_price_35": "6.9",
+      "declaration_name": "墙角保护条",
+      "model": "4cm-6.1m",
+      "material": "TPE",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-051",
+      "skus": [],
+      "standard_name": "墙角保护条6cm-3.3m",
+      "unit_weight": null,
+      "unit_price_35": "0",
+      "declaration_name": "墙角保护条",
+      "model": "6cm-3.3m",
+      "material": "TPE",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-052",
+      "skus": [
+        "F00501"
+      ],
+      "standard_name": "墙角保护条6cm-6.1m",
+      "unit_weight": "0.7",
+      "unit_price_35": "8.15",
+      "declaration_name": "墙角保护条",
+      "model": "6cm-6.1m",
+      "material": "TPE",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-053",
+      "skus": [
+        "F00537",
+        "F00507",
+        "F00503"
+      ],
+      "standard_name": "镂空挡水条1m",
+      "unit_weight": "0.25",
+      "unit_price_35": "6.3",
+      "declaration_name": "镂空挡水条",
+      "model": "1mX3cmX1.4cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-054",
+      "skus": [
+        "F00538",
+        "F00508",
+        "F00504"
+      ],
+      "standard_name": "镂空挡水条1.7m",
+      "unit_weight": "0.4",
+      "unit_price_35": "9.45",
+      "declaration_name": "镂空挡水条",
+      "model": "1.7mX3cmX1.4cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-055",
+      "skus": [
+        "F00509",
+        "F00505"
+      ],
+      "standard_name": "镂空挡水条2.5m",
+      "unit_weight": "0.6",
+      "unit_price_35": "12.6",
+      "declaration_name": "镂空挡水条",
+      "model": "2.5mX3cmX1.4cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-056",
+      "skus": [
+        "F00510",
+        "F00506"
+      ],
+      "standard_name": "镂空挡水条3.5m",
+      "unit_weight": "0.8",
+      "unit_price_35": "15.45",
+      "declaration_name": "镂空挡水条",
+      "model": "3.5mX3cmX1.4cm",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-057",
+      "skus": [
+        "F00511"
+      ],
+      "standard_name": "扇形墙角装饰条0.5m",
+      "unit_weight": "0.1",
+      "unit_price_35": "2.2",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "0.5mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-058",
+      "skus": [
+        "F00512"
+      ],
+      "standard_name": "扇形墙角装饰条1m",
+      "unit_weight": "0.15",
+      "unit_price_35": "3.15",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "1mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-059",
+      "skus": [
+        "F00513"
+      ],
+      "standard_name": "扇形墙角装饰条2m",
+      "unit_weight": "0.3",
+      "unit_price_35": "4.75",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "2mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-060",
+      "skus": [
+        "F00514"
+      ],
+      "standard_name": "扇形墙角装饰条3m",
+      "unit_weight": "0.4",
+      "unit_price_35": "5.95",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "3mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-061",
+      "skus": [
+        "F00515"
+      ],
+      "standard_name": "扇形墙角装饰条4m",
+      "unit_weight": "0.55",
+      "unit_price_35": "6.95",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "4mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-062",
+      "skus": [
+        "F00516"
+      ],
+      "standard_name": "扇形墙角装饰条6m",
+      "unit_weight": "0.85",
+      "unit_price_35": "9.45",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "6mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-063",
+      "skus": [
+        "F00517"
+      ],
+      "standard_name": "扇形墙角装饰条12m",
+      "unit_weight": "1.7",
+      "unit_price_35": "15.75",
+      "declaration_name": "扇形墙角装饰条",
+      "model": "12mX1.5cmX1.5cm",
+      "material": "硅胶",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-064",
+      "skus": [
+        "F00527",
+        "F00528",
+        "F00529"
+      ],
+      "standard_name": "角落装饰条3.8cm-5m",
+      "unit_weight": "0.25",
+      "unit_price_35": "4.7",
+      "declaration_name": "角落装饰条",
+      "model": "5mX3.8cm",
+      "material": "PVC",
+      "usage": "角落保护密封"
+    },
+    {
+      "id": "product-065",
+      "skus": [
+        "F00530"
+      ],
+      "standard_name": "角落装饰条3.8cm-10m",
+      "unit_weight": "0.45",
+      "unit_price_35": "6.3",
+      "declaration_name": "角落装饰条",
+      "model": "10mX3.8cm",
+      "material": "PVC",
+      "usage": "角落保护密封"
+    },
+    {
+      "id": "product-066",
+      "skus": [
+        "F00531",
+        "F00532"
+      ],
+      "standard_name": "角落装饰条6cm-5m",
+      "unit_weight": "0.4",
+      "unit_price_35": "6.3",
+      "declaration_name": "角落装饰条",
+      "model": "5mX6cm",
+      "material": "PVC",
+      "usage": "角落保护密封"
+    },
+    {
+      "id": "product-067",
+      "skus": [
+        "F00533"
+      ],
+      "standard_name": "角落装饰条6cm-10m",
+      "unit_weight": "0.75",
+      "unit_price_35": "7.95",
+      "declaration_name": "角落装饰条",
+      "model": "10mX6cm",
+      "material": "PVC",
+      "usage": "角落保护密封"
+    },
+    {
+      "id": "product-068",
+      "skus": [
+        "F00534"
+      ],
+      "standard_name": "柔性踢脚线5m",
+      "unit_weight": "0.5",
+      "unit_price_35": "5.85",
+      "declaration_name": "柔性踢脚线",
+      "model": "5mX6cm",
+      "material": "PVC",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-069",
+      "skus": [
+        "F00535"
+      ],
+      "standard_name": "柔性踢脚线10m",
+      "unit_weight": "1",
+      "unit_price_35": "8.7",
+      "declaration_name": "柔性踢脚线",
+      "model": "10mX6cm",
+      "material": "PVC",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-070",
+      "skus": [
+        "F00536"
+      ],
+      "standard_name": "柔性踢脚线15m",
+      "unit_weight": "1.55",
+      "unit_price_35": "11.7",
+      "declaration_name": "柔性踢脚线",
+      "model": "15mX6cm",
+      "material": "PVC",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-071",
+      "skus": [
+        "F00554",
+        "F00557"
+      ],
+      "standard_name": "柔性踢脚线6m",
+      "unit_weight": "0.55",
+      "unit_price_35": "6.05",
+      "declaration_name": "柔性踢脚线",
+      "model": "6mX6cm",
+      "material": "PVC",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-072",
+      "skus": [
+        "F00555",
+        "F00558"
+      ],
+      "standard_name": "柔性踢脚线12m",
+      "unit_weight": "1.05",
+      "unit_price_35": "9.5",
+      "declaration_name": "柔性踢脚线",
+      "model": "12mX6cm",
+      "material": "PVC",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-073",
+      "skus": [
+        "F00556",
+        "F00559"
+      ],
+      "standard_name": "柔性踢脚线18m",
+      "unit_weight": "1.6",
+      "unit_price_35": "12.45",
+      "declaration_name": "柔性踢脚线",
+      "model": "18mX6cm",
+      "material": "PVC",
+      "usage": "墙角保护密封"
+    },
+    {
+      "id": "product-074",
+      "skus": [
+        "F00582"
+      ],
+      "standard_name": "U型边缘装饰条1.6mm-3.05米",
+      "unit_weight": "0.15",
+      "unit_price_35": "3.5",
+      "declaration_name": "U型边缘装饰条",
+      "model": "3.05mX1.6cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-075",
+      "skus": [
+        "F00583"
+      ],
+      "standard_name": "U型边缘装饰条1.6mm-6.1米",
+      "unit_weight": "0.25",
+      "unit_price_35": "5.95",
+      "declaration_name": "U型边缘装饰条",
+      "model": "6.1mX1.6cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-076",
+      "skus": [
+        "F00584"
+      ],
+      "standard_name": "U型边缘装饰条3.2mm-3.05米",
+      "unit_weight": "0.15",
+      "unit_price_35": "9.1",
+      "declaration_name": "U型边缘装饰条",
+      "model": "3.05mX3.2cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-077",
+      "skus": [
+        "F00585"
+      ],
+      "standard_name": "U型边缘装饰条3.2mm-6.1米",
+      "unit_weight": "0.25",
+      "unit_price_35": "7.7",
+      "declaration_name": "U型边缘装饰条",
+      "model": "6.1mX3.2cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-078",
+      "skus": [
+        "F00586"
+      ],
+      "standard_name": "U型边缘装饰条6.4mm-3.05米",
+      "unit_weight": "0.2",
+      "unit_price_35": "6.65",
+      "declaration_name": "U型边缘装饰条",
+      "model": "3.05mX6.4cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-079",
+      "skus": [
+        "F00587"
+      ],
+      "standard_name": "U型边缘装饰条6.4mm-6.1米",
+      "unit_weight": "0.35",
+      "unit_price_35": "9.45",
+      "declaration_name": "U型边缘装饰条",
+      "model": "6.1mX6.4cm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-080",
+      "skus": [
+        "F00565",
+        "F00569",
+        "F00573",
+        "F00575"
+      ],
+      "standard_name": "T型挡水条1米",
+      "unit_weight": "0.15",
+      "unit_price_35": "5.6",
+      "declaration_name": "T型挡水条",
+      "model": "1m",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-081",
+      "skus": [
+        "F00566",
+        "F00570",
+        "F00574",
+        "F00576"
+      ],
+      "standard_name": "T型挡水条1.7米",
+      "unit_weight": "0.25",
+      "unit_price_35": "8.4",
+      "declaration_name": "T型挡水条",
+      "model": "1.7m",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-082",
+      "skus": [
+        "F00567",
+        "F00571"
+      ],
+      "standard_name": "T型挡水条2.5米",
+      "unit_weight": "0.35",
+      "unit_price_35": "11.55",
+      "declaration_name": "T型挡水条",
+      "model": "2.5m",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-083",
+      "skus": [
+        "F00568",
+        "F00572"
+      ],
+      "standard_name": "T型挡水条3.5米",
+      "unit_weight": "0.5",
+      "unit_price_35": "14",
+      "declaration_name": "T型挡水条",
+      "model": "3.5m",
+      "material": "硅胶",
+      "usage": "淋浴挡水"
+    },
+    {
+      "id": "product-084",
+      "skus": [
+        "F00588"
+      ],
+      "standard_name": "葫芦形门窗密封条3米",
+      "unit_weight": "0.15",
+      "unit_price_35": "3.57",
+      "declaration_name": "葫芦形门窗密封条",
+      "model": "3mX10mmX8mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-085",
+      "skus": [
+        "F00589"
+      ],
+      "standard_name": "葫芦形门窗密封条7米",
+      "unit_weight": "0.3",
+      "unit_price_35": "6.895",
+      "declaration_name": "葫芦形门窗密封条",
+      "model": "5mX10mmX8mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    },
+    {
+      "id": "product-086",
+      "skus": [
+        "F00590"
+      ],
+      "standard_name": "葫芦形门窗密封条12米",
+      "unit_weight": "0.4",
+      "unit_price_35": "9.17",
+      "declaration_name": "葫芦形门窗密封条",
+      "model": "7mX10mmX8mm",
+      "material": "EPDM",
+      "usage": "门窗密封"
+    }
+  ]
+}
+

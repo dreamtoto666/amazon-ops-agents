@@ -40,6 +40,7 @@ from .llm_agents import (
     DeepSeekStrategyRecommendationAgent,
 )
 from .runtime import AdvertisingRunManager, AdvertisingRunRecord
+from .report_specialist import ImportedAdvertisingReportSpecialist
 from .tools import ATTRIBUTION_TOOLS, INSPECTION_TOOLS, WRITE_TOOLS_DISABLED
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "AdvertisingDiagnosticServices",
     "AdvertisingRunManager",
     "AdvertisingRunRecord",
+    "ImportedAdvertisingReportSpecialist",
     "AnomalyType",
     "AttributionResult",
     "AttributionFinding",

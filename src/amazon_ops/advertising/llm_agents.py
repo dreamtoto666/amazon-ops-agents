@@ -129,7 +129,7 @@ class DeepSeekProblemAttributionAgent:
         "转化下降",
         "转化率下降",
     )
-    MAX_LLM_ANOMALIES = 10
+    MAX_LLM_ANOMALIES = 20
 
     def __init__(self, gateway: AdvertisingDataGateway, llm: StructuredLLM) -> None:
         self.evidence_agent = EvidenceBasedProblemAttributionAgent(gateway)
@@ -421,25 +421,19 @@ class DeepSeekStrategyRecommendationAgent:
         for decision in output.decisions:
             cause = cause_by_id.get(decision.cause_id)
             if cause is None or decision.cause_id in seen_causes:
-                raise LLMError(
-                    "DeepSeek advertising strategy referenced an invalid cause",
-                    code="DEEPSEEK_INVALID_AD_STRATEGY",
-                )
+                warnings.append("一条策略建议引用了无效或重复的归因，已忽略该建议。")
+                continue
             evidence_refs = list(dict.fromkeys(decision.evidence_refs))
             if not evidence_refs or any(ref not in cause.evidence_refs for ref in evidence_refs):
-                raise LLMError(
-                    "DeepSeek advertising strategy referenced invalid evidence",
-                    code="DEEPSEEK_INVALID_AD_EVIDENCE",
-                )
+                warnings.append("一条策略建议引用了未验证证据，已降级为待人工复核。")
+                continue
             anomaly = next(
                 (anomaly_by_id[item] for item in cause.anomaly_ids if item in anomaly_by_id),
                 None,
             )
             if anomaly is None:
-                raise LLMError(
-                    "DeepSeek advertising strategy has no valid target",
-                    code="DEEPSEEK_INVALID_AD_STRATEGY",
-                )
+                warnings.append("一条策略建议没有可验证的广告活动目标，已忽略该建议。")
+                continue
 
             action_type = decision.action_type
             title = decision.title

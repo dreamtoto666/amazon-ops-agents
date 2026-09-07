@@ -26,6 +26,8 @@ interface RunState {
   events: StageEvent[];
   connection: 'connecting' | 'live' | 'completed' | 'waiting' | 'error';
   error?: string;
+  /** 模型思考过程的增量文本，按 unit_id（专家）或 stage 分块累积。 */
+  reasonings: Record<string, string>;
 }
 
 type RunAction =
@@ -34,7 +36,7 @@ type RunAction =
   | { type: 'error'; error: string }
   | { type: 'reset' };
 
-const initialState: RunState = { events: [], connection: 'connecting' };
+const initialState: RunState = { events: [], connection: 'connecting', reasonings: {} };
 
 function reducer(state: RunState, action: RunAction): RunState {
   if (action.type === 'reset') return initialState;
@@ -47,7 +49,24 @@ function reducer(state: RunState, action: RunAction): RunState {
   if (action.event.event === 'run.completed') connection = 'completed';
   if (action.event.event === 'run.failed') connection = 'error';
   if (action.event.event === 'stage.waiting') connection = 'waiting';
-  return { ...state, events, connection };
+
+  let reasonings = state.reasonings;
+  if (
+    !exists &&
+    action.event.event === 'stage.progress' &&
+    action.event.data.kind === 'reasoning.delta' &&
+    typeof action.event.data.text === 'string'
+  ) {
+    const key =
+      typeof action.event.data.unit_id === 'string'
+        ? action.event.data.unit_id
+        : action.event.stage ?? 'unknown';
+    reasonings = {
+      ...state.reasonings,
+      [key]: (state.reasonings[key] ?? '') + action.event.data.text
+    };
+  }
+  return { ...state, events, connection, reasonings };
 }
 
 export function useRunStream(runId: string, enabled = true) {
@@ -126,5 +145,11 @@ export function useRunStream(runId: string, enabled = true) {
     return Array.from(views.values());
   }, [state.events]);
 
-  return { ...state, stages, specialists, restart };
+  return {
+    ...state,
+    reasonings: state.reasonings ?? {},
+    stages,
+    specialists,
+    restart
+  };
 }

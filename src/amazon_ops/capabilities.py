@@ -56,13 +56,7 @@ def build_capability_answer(state: Mapping[str, Any]) -> str | None:
         return "Sif MCP 已配置，但当前没有注册能够调用它的专业 Agent。"
 
     if "领星" in text or "lingxing" in text:
-        if not _configured(mcp, "lingxing"):
-            return "领星 MCP 当前尚未配置，因此暂时不能查询店铺经营、商品、广告、库存和利润数据。"
-        return (
-            "领星 MCP 已完成连接配置，并通过只读工具发现验证。当前只有 Listing 文案 Agent "
-            "完成注册，销售利润、广告、库存和市场风险 Agent 尚未接入总控，因此暂时不会把经营"
-            "查询路由到领星；需要先完成对应专业 Agent 与领星只读工具的字段映射。"
-        )
+        return "该 MCP 能力当前未接入运营助手。"
 
     return None
 

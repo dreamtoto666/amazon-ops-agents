@@ -4,9 +4,11 @@ import {
   ADVERTISING_STAGE_EVENT_NAMES,
   type AdvertisingRunRecord,
   type AdvertisingShop,
+  type AdvertisingSelectionDirectory,
   type AdvertisingStageEvent,
   type CreateAdvertisingRunInput,
 } from "./types";
+import { createUuid } from "@/lib/uuid";
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as T & {
@@ -24,9 +26,15 @@ export async function getAdvertisingShops(): Promise<AdvertisingShop[]> {
   );
 }
 
+export async function getAdvertisingSelectionDirectory(): Promise<AdvertisingSelectionDirectory> {
+  return readJson<AdvertisingSelectionDirectory>(
+    await fetch('/api/ad-diagnostics/selection-directory', { cache: 'no-store' }),
+  );
+}
+
 export async function createAdvertisingRun(
   input: CreateAdvertisingRunInput,
-  idempotencyKey = crypto.randomUUID(),
+  idempotencyKey = createUuid(),
 ): Promise<{ run_id: string; trace_id: string; status: string }> {
   return readJson(
     await fetch("/api/ad-diagnostics/runs", {

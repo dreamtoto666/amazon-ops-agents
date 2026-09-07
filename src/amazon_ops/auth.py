@@ -211,6 +211,13 @@ class AuthStore:
                     connection.execute("CREATE TABLE IF NOT EXISTS auth_password_resets (id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES auth_users(id), token_hash TEXT UNIQUE NOT NULL, expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)")
                     connection.execute("CREATE TABLE IF NOT EXISTS auth_login_attempts (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL, ip_address TEXT NOT NULL, attempted_at TIMESTAMPTZ NOT NULL)")
                     connection.execute("CREATE INDEX IF NOT EXISTS auth_login_attempts_time_idx ON auth_login_attempts (attempted_at)")
+                    connection.execute("COMMENT ON TABLE auth_users IS '运营系统用户账户及角色；密码仅以 password_hash 形式保存。'")
+                    connection.execute("COMMENT ON COLUMN auth_users.role IS '系统角色：admin 或 operator，用于接口权限控制。'")
+                    connection.execute("COMMENT ON TABLE auth_sessions IS '登录会话；仅保存会话令牌哈希，不保存明文令牌。'")
+                    connection.execute("COMMENT ON COLUMN auth_sessions.token_hash IS '登录令牌的 SHA-256 哈希，禁止记录或返回原始令牌。'")
+                    connection.execute("COMMENT ON TABLE auth_invites IS '历史邀请记录；当前产品流程不再创建邮件邀请。'")
+                    connection.execute("COMMENT ON TABLE auth_password_resets IS '历史密码重置记录；当前产品流程不启用邮件重置。'")
+                    connection.execute("COMMENT ON TABLE auth_login_attempts IS '登录限流审计记录，按邮箱和 IP 统计最近失败尝试。'")
             self._schema_ready = True
 
 

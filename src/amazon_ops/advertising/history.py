@@ -377,4 +377,13 @@ class PostgresAdvertisingRunHistoryStore:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS advertising_diagnostic_runs_owner_created_at_idx ON advertising_diagnostic_runs (owner_id, created_at DESC)"
                 )
+                connection.execute("COMMENT ON TABLE advertising_diagnostic_runs IS '广告异常诊断的持久化运行记录，包含阶段、结果、恢复租约和追踪标识。'")
+                connection.execute("COMMENT ON COLUMN advertising_diagnostic_runs.owner_id IS '发起诊断的租户/用户标识，用于数据隔离。'")
+                connection.execute("COMMENT ON COLUMN advertising_diagnostic_runs.trace_id IS '一次完整广告诊断链路的可追溯标识。'")
+                connection.execute("COMMENT ON COLUMN advertising_diagnostic_runs.request_payload IS '经验证的诊断请求范围与阈值 JSON。'")
+                connection.execute("COMMENT ON COLUMN advertising_diagnostic_runs.result_payload IS '四阶段诊断完成后的结构化报告 JSON。'")
+                connection.execute("COMMENT ON TABLE advertising_diagnostic_checkpoints IS '广告诊断阶段检查点，用于进程中断后的安全恢复。'")
+                connection.execute("COMMENT ON COLUMN advertising_diagnostic_checkpoints.state_payload IS '恢复所需的结构化工作流状态，不包含未压缩 MCP 原始大负载。'")
+                connection.execute("COMMENT ON TABLE advertising_diagnostic_call_ledger IS '广告诊断只读数据调用账本，用于去重、恢复及调用配额审计。'")
+                connection.execute("COMMENT ON COLUMN advertising_diagnostic_call_ledger.logical_key IS '由阶段、轮次、工具和规范化参数生成的幂等读取键。'")
             self._schema_ready = True

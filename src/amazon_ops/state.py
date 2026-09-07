@@ -9,10 +9,12 @@ from langgraph.graph.message import add_messages
 class AmazonOpsState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
     request_id: str
+    owner_id: str
     user_context: dict[str, Any]
     shop_directory: list[dict[str, Any]]
     system_capabilities: dict[str, Any]
     current_time: str
+    image_attachments: list[str]
 
     understanding: dict[str, Any]
     intent: dict[str, Any]

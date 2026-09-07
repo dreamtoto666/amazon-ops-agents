@@ -2,6 +2,8 @@ server {
     listen 80;
     listen [::]:80;
     server_name __APP_DOMAIN__;
+    # Customs declarations accept two XLSX files of up to 20 MiB each.
+    client_max_body_size 50m;
 
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/amazon-ops-certbot;
