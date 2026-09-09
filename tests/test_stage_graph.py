@@ -82,7 +82,7 @@ class FailedSpecialist:
 
 def test_controller_graph_emits_analysis_verification_and_synthesis_stages():
     understanding = UnderstandRequestResult(
-        intent=UserIntent(domain=Domain.STORE, action=Action.DIAGNOSE, confidence=0.95),
+        intent=UserIntent(domain=Domain.STORE, action=Action.DIAGNOSE, primary_agent=SpecialistName.SALES_PROFIT, confidence=0.95),
         scope=QueryScope(shop_ids=["10001"]),
         route=RequestRoute.EXECUTE,
         risk_level=RiskLevel.READ_ONLY,
@@ -185,7 +185,7 @@ def test_direct_deepseek_response_is_carried_by_terminal_sse_event():
 
 def test_controller_waits_when_listing_agent_needs_product_information():
     understanding = UnderstandRequestResult(
-        intent=UserIntent(domain=Domain.LISTING, action=Action.CREATE, confidence=0.98),
+        intent=UserIntent(domain=Domain.LISTING, action=Action.CREATE, primary_agent=SpecialistName.LISTING_CONTENT, confidence=0.98),
         scope=QueryScope(marketplaces=["US"]),
         route=RequestRoute.EXECUTE,
         risk_level=RiskLevel.READ_ONLY,
@@ -215,7 +215,7 @@ def test_controller_waits_when_listing_agent_needs_product_information():
 
 def test_controller_marks_the_run_failed_when_every_specialist_fails():
     understanding = UnderstandRequestResult(
-        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.98),
+        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, primary_agent=SpecialistName.ADVERTISING, confidence=0.98),
         scope=QueryScope(),
         route=RequestRoute.EXECUTE,
         risk_level=RiskLevel.READ_ONLY,

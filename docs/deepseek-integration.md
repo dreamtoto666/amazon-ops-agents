@@ -2,7 +2,7 @@
 
 ## 选型
 
-项目所有需要大模型的角色统一使用 DeepSeek。确定性路由、关键词评分、规则质检和 MCP 数据转换仍由代码完成，不会为了“全用 LLM”而改成概率式逻辑。
+项目所有需要大模型的角色统一使用 DeepSeek。总控的专家选择由 LLM 基于运行时能力清单完成；关键词评分、规则质检和 MCP 数据转换仍由代码完成。
 
 默认模型为 `deepseek-v4-flash`，默认关闭思考模式（`reasoning_effort=off`），用于降低普通结构化任务的延迟和成本。聊天输入框可为单次任务选择模型（`deepseek-v4-flash`、`deepseek-v4-pro`、`deepseek-v4-flash-vision-exp`）**和推理等级**（`off`/`low`/`high`/`max`，默认 `off`）；选择会贯穿总控与广告只读专家（它们共享同一 `DeepSeekModelRoles`），且不会改变其他任务的模型。未选择时使用 `.env` 中的默认模型。生产代码不为每个 Agent 配置不同供应商。
 

@@ -36,7 +36,7 @@ docker compose up --build -d
 
 Docker Compose 会启动 PostgreSQL、Agent API 和前端。任务创建幂等记录及运营助手会话记忆都保存在 PostgreSQL 数据卷中，API 重启后仍可继续同一会话。详细规则见[任务创建幂等键](docs/idempotency.md)。
 
-已导入广告报表的只读查询也可作为内部 MCP 工具运行。使用 `./scripts/start-nl2sql-mcp.sh` 启动 stdio Server；它查询团队共享的广告数据，仍要求 `DATABASE_READONLY_URL`。
+已导入广告报表的只读查询也可作为内部 MCP 工具运行。使用 `./scripts/start-nl2sql-mcp.sh` 启动 stdio Server；它查询团队共享的广告数据，仍要求 `DATABASE_READONLY_URL`。Docker 本地开发默认连接项目数据库；生产环境必须在 `.env` 中用具备 SELECT 权限的专用只读账号覆盖该变量。
 
 生产服务器部署请使用 [生产部署指南](docs/production-deployment.md)。该方案通过 Nginx + Certbot
 提供 HTTPS；PostgreSQL 和 API 不开放公网端口，发布包不包含密钥。
@@ -70,7 +70,7 @@ src/amazon_ops/
 ├── models.py      # 统一输入输出协议
 ├── prompts.py     # 版本化的主控系统提示词与运行时上下文
 ├── presenter.py   # JSON → 紧凑 Outline / 前端树形 JSON
-├── routing.py     # 确定性路由规则
+├── routing.py     # 根据 LLM 选择生成执行计划
 ├── sse.py         # SSE编码、心跳和Last-Event-ID重放
 └── state.py       # 共享 State
 ```
