@@ -8,8 +8,14 @@ from amazon_ops.models import (
 from amazon_ops.routing import build_initial_plan
 
 
-def test_focused_product_diagnosis_fans_out_to_all_specialists():
-    intent = UserIntent(domain=Domain.PRODUCT, action=Action.DIAGNOSE, confidence=0.95)
+def test_llm_selected_agents_are_preserved_for_a_product_diagnosis():
+    intent = UserIntent(
+        domain=Domain.PRODUCT,
+        action=Action.DIAGNOSE,
+        primary_agent=SpecialistName.SALES_PROFIT,
+        supporting_agents=[SpecialistName.INVENTORY, SpecialistName.MARKET_RISK],
+        confidence=0.95,
+    )
     scope = QueryScope(asins=["B0TEST"])
 
     plan = build_initial_plan(intent, scope, "诊断 B0TEST 销量下降原因")
@@ -22,8 +28,8 @@ def test_focused_product_diagnosis_fans_out_to_all_specialists():
     assert plan.execution_mode == "parallel"
 
 
-def test_profit_query_routes_only_to_sales_profit():
-    intent = UserIntent(domain=Domain.PROFIT, action=Action.QUERY, confidence=0.99)
+def test_llm_selected_primary_agent_is_used_for_a_profit_query():
+    intent = UserIntent(domain=Domain.PROFIT, action=Action.QUERY, primary_agent=SpecialistName.SALES_PROFIT, confidence=0.99)
 
     plan = build_initial_plan(intent, QueryScope(), "查询利润")
 
@@ -31,24 +37,33 @@ def test_profit_query_routes_only_to_sales_profit():
     assert plan.max_rounds == 1
 
 
-def test_advertising_query_routes_to_advertising_specialist():
-    intent = UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.99)
+def test_llm_selected_primary_agent_is_used_for_an_advertising_query():
+    intent = UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, primary_agent=SpecialistName.ADVERTISING, confidence=0.99)
 
     plan = build_initial_plan(intent, QueryScope(), "查询广告花费")
 
     assert [task.agent for task in plan.tasks] == [SpecialistName.ADVERTISING]
 
 
-def test_custom_report_query_has_a_safe_default_route():
-    intent = UserIntent(domain=Domain.REPORT, action=Action.QUERY, confidence=0.9)
+def test_plan_is_unsupported_when_llm_does_not_select_an_agent():
+    intent = UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.99)
+
+    plan = build_initial_plan(intent, QueryScope(), "查询广告花费")
+
+    assert plan.route.value == "unsupported"
+    assert plan.tasks == []
+
+
+def test_llm_selected_primary_agent_is_used_for_a_report_query():
+    intent = UserIntent(domain=Domain.REPORT, action=Action.QUERY, primary_agent=SpecialistName.SALES_PROFIT, confidence=0.9)
 
     plan = build_initial_plan(intent, QueryScope(), "查询月度销售汇总报表")
 
     assert [task.agent for task in plan.tasks] == [SpecialistName.SALES_PROFIT]
 
 
-def test_listing_copy_request_routes_to_listing_content_agent():
-    intent = UserIntent(domain=Domain.LISTING, action=Action.CREATE, confidence=0.98)
+def test_llm_selected_primary_agent_is_used_for_a_listing_request():
+    intent = UserIntent(domain=Domain.LISTING, action=Action.CREATE, primary_agent=SpecialistName.LISTING_CONTENT, confidence=0.98)
 
     plan = build_initial_plan(intent, QueryScope(marketplaces=["US"]), "编写 Listing 文案")
 

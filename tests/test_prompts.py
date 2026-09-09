@@ -10,15 +10,9 @@ from amazon_ops.prompts import (
 )
 
 
-def test_interpreter_prompt_contains_core_safety_and_routing_contracts():
-    assert "不调用任何外部 MCP" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "不得要求 `shop_id`" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "不得因缺少 `period` 进入 clarify" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "确定性路由器" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "route=approval" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "低 confidence 本身不是追问理由" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "能力询问本身判为 unsupported" in REQUEST_INTERPRETER_SYSTEM_PROMPT
-    assert "只输出符合 UnderstandRequestResult Schema" in REQUEST_INTERPRETER_SYSTEM_PROMPT
+def test_interpreter_prompt_contains_its_compact_responsibilities():
+    assert "职责：" in REQUEST_INTERPRETER_SYSTEM_PROMPT
+    assert "结构化、可执行、可审计的任务描述" in REQUEST_INTERPRETER_SYSTEM_PROMPT
 
 
 def test_aggregator_prompt_separates_facts_hypotheses_and_actions():

@@ -28,7 +28,6 @@ export function AdvertisingReportImport() {
   return <Card className='space-y-2 p-2'>
     <p className='font-medium'>导入共享广告报表</p>
     <FileUploader accept={{ 'text/csv': ['.csv'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] }} maxSize={20 * 1024 * 1024} maxFiles={1} onUpload={upload} disabled={busy} compact className='h-16' />
-    <p className='text-xs text-muted-foreground'>校验通过后立即写入团队共享数据；相同店铺、报表类型和业务行会更新为本次上传结果。</p>
     {message && <p className={message.includes('已共享导入') ? 'text-sm text-emerald-700' : 'text-sm text-destructive'}>{message}</p>}
   </Card>;
 }

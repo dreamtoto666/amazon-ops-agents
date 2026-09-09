@@ -47,7 +47,7 @@ class FakeSpecialist:
 
 def test_graph_executes_initial_and_followup_specialist():
     understanding = UnderstandRequestResult(
-        intent=UserIntent(domain=Domain.STORE, action=Action.DIAGNOSE, confidence=0.95),
+        intent=UserIntent(domain=Domain.STORE, action=Action.DIAGNOSE, primary_agent=SpecialistName.SALES_PROFIT, confidence=0.95),
         scope=QueryScope(shop_ids=["10001"]),
         route=RequestRoute.EXECUTE,
         risk_level=RiskLevel.READ_ONLY,
@@ -97,7 +97,7 @@ def test_graph_stops_and_asks_for_clarification():
 
 def test_graph_executes_imported_ad_report_query_without_shop_or_period():
     understanding = UnderstandRequestResult(
-        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.96),
+        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, primary_agent=SpecialistName.ADVERTISING, confidence=0.96),
         scope=QueryScope(),
         route=RequestRoute.CLARIFY,
         risk_level=RiskLevel.READ_ONLY,

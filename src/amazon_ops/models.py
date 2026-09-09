@@ -86,6 +86,8 @@ class UserIntent(BaseModel):
     domain: Domain
     action: Action
     secondary_domains: list[Domain] = Field(default_factory=list)
+    primary_agent: SpecialistName | None = None
+    supporting_agents: list[SpecialistName] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
 
 
