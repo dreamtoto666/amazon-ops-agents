@@ -22,7 +22,7 @@ PRIMARY_ROUTES: dict[Domain, SpecialistName] = {
     Domain.PROFIT: SpecialistName.SALES_PROFIT,
     Domain.INVENTORY: SpecialistName.INVENTORY,
     Domain.KEYWORD: SpecialistName.MARKET_RISK,
-    Domain.COMPETITOR: SpecialistName.MARKET_RISK,
+    Domain.COMPETITOR: SpecialistName.COMPETITOR_ADVERTISING,
     Domain.FOLLOW_SALE: SpecialistName.MARKET_RISK,
     Domain.LISTING: SpecialistName.LISTING_CONTENT,
     Domain.REPORT: SpecialistName.SALES_PROFIT,
@@ -41,7 +41,13 @@ def _task(agent: SpecialistName, objective: str, reason: str, priority: int = 1)
     )
 
 
-def build_initial_plan(intent: UserIntent, scope: QueryScope, normalized_request: str) -> RoutePlan:
+def build_initial_plan(
+    intent: UserIntent,
+    scope: QueryScope,
+    normalized_request: str,
+    *,
+    response_mode: str = "chat",
+) -> RoutePlan:
     primary = PRIMARY_ROUTES.get(intent.domain)
     if primary is None:
         return RoutePlan(route=RequestRoute.UNSUPPORTED, execution_mode="none")
@@ -58,6 +64,9 @@ def build_initial_plan(intent: UserIntent, scope: QueryScope, normalized_request
         ]
     elif intent.action in {Action.DIAGNOSE, Action.RECOMMEND}:
         max_rounds = 2
+
+    if intent.domain == Domain.COMPETITOR and response_mode == "competitor_report":
+        agents.append(SpecialistName.ADVERTISING)
 
     for domain in intent.secondary_domains:
         agent = DOMAIN_ROUTES.get(domain)

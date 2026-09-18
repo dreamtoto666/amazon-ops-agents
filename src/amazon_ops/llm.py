@@ -11,8 +11,11 @@ from dotenv import load_dotenv
 from langsmith import get_current_run_tree, traceable
 from pydantic import BaseModel, Field, ValidationError
 
+from .observability import langfuse_observation
+
 
 TModel = TypeVar("TModel", bound=BaseModel)
+MAX_COMPLETION_TOKENS = 384_000
 DeepSeekModelName = Literal[
     "deepseek-v4-flash",
     "deepseek-v4-pro",
@@ -46,7 +49,7 @@ class DeepSeekConfig(BaseModel):
     base_url: str = Field(default="https://api.deepseek.com", pattern=r"^https://")
     model: DeepSeekModelName = "deepseek-v4-flash"
     timeout_seconds: float = Field(default=120, gt=0, le=600)
-    max_tokens: int = Field(default=6000, ge=256, le=384_000)
+    max_tokens: int = Field(default=6000, ge=256, le=MAX_COMPLETION_TOKENS)
     temperature: float = Field(default=0.3, ge=0, le=2)
     thinking_enabled: bool = False
     # Optional reasoning-effort level. When low/high/max, thinking is enabled
@@ -169,21 +172,26 @@ class DeepSeekStructuredLLM:
             **thinking_payload,
             "stream": False,
         }
-        try:
-            response = self._http.post(
-                f"{self.config.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            raise LLMError(
-                "DeepSeek API is temporarily unreachable",
-                code="DEEPSEEK_CONNECTION_FAILED",
-                retryable=True,
-            ) from exc
+        with langfuse_observation(
+            name="deepseek_structured_completion",
+            as_type="generation",
+            metadata={"provider": "deepseek", "model": self.config.model, "output_schema": output_model.__name__},
+        ):
+            try:
+                response = self._http.post(
+                    f"{self.config.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                raise LLMError(
+                    "DeepSeek API is temporarily unreachable",
+                    code="DEEPSEEK_CONNECTION_FAILED",
+                    retryable=True,
+                ) from exc
 
         if response.status_code >= 400:
             code = (
@@ -206,7 +214,10 @@ class DeepSeekStructuredLLM:
             # the stage budget. Retrying once is safe: this endpoint has no
             # side effects and the failed response cannot be parsed anyway.
             if choice.get("finish_reason") == "length":
-                retry_budget = min(max(int(body["max_tokens"]) * 2, 4096), 12000)
+                retry_budget = min(
+                    max(int(body["max_tokens"]) * 2, 4096),
+                    MAX_COMPLETION_TOKENS,
+                )
                 retry_body = {**body, "max_tokens": retry_budget}
                 retry_response = self._http.post(
                     f"{self.config.base_url}/chat/completions",

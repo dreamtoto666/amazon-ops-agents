@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from amazon_ops.llm import StructuredLLM, build_deepseek_llm
 from amazon_ops.events import InMemoryEventHub, StageEventType, StageName
 from amazon_ops.listing.mcp import mcp_trace_context
+from amazon_ops.observability import langfuse_observation
 
 from .agents import (
     ApprovalRequiredReviewTodoAgent,
@@ -344,6 +345,7 @@ class AdvertisingRunManager:
                 display_scope=(
                     {
                         "shop_label": execution_scope.shop_label,
+                        "title": self._history_title(request, execution_scope),
                         "campaign_count": len(execution_scope.campaign_ids),
                         "current_period": request.current_period.model_dump(mode="json"),
                     }
@@ -357,6 +359,19 @@ class AdvertisingRunManager:
         self.history_store.save(record.model_dump(mode="json"), request.model_dump(mode="json"), owner_id)
         self._executor.submit(self._execute, run_id, trace_id, root_span_id, request, None, None)
         return run_id
+
+    @staticmethod
+    def _history_title(request: AdDiagnosticRequest, scope: ResolvedExecutionScope) -> str:
+        """Create an operator-facing label without adding selection data to graph state."""
+        products = list(scope.parent_asins)
+        if len(products) > 2:
+            product_label = f"{products[0]}、{products[1]} 等 {len(products)} 个产品"
+        else:
+            product_label = "、".join(products) or "所选产品"
+        return (
+            f"{scope.shop_label} · {product_label} · "
+            f"{request.current_period.start} 至 {request.current_period.end}"
+        )
 
     def _resolve_campaign_ids(
         self,
@@ -494,22 +509,32 @@ class AdvertisingRunManager:
             display_scope = self._runs.get(run_id).display_scope if self._runs.get(run_id) else None
         try:
             graph = build_advertising_diagnostic_graph(services=services)
-            with mcp_trace_context(run_id=run_id, trace_id=trace_id):
-                output = graph.invoke(
-                    state,
-                    config={
-                        "run_name": "amazon_ops.advertising_diagnostic",
-                        "tags": ["amazon-ops", "advertising-diagnostic", request.trigger],
-                        "metadata": {
-                            "workflow": "advertising_diagnostic",
-                            "trace_id": trace_id,
-                            "run_id": run_id,
-                            "profile_ids": request.profile_ids,
-                            "goal": request.goal.growth_priority,
-                            "baseline_comparison": bool(request.baseline_period),
+            with langfuse_observation(
+                name="advertising_diagnostic",
+                as_type="agent",
+                metadata={
+                    "workflow": "advertising_diagnostic",
+                    "run_id": run_id,
+                    "trace_id": trace_id,
+                    "trigger": request.trigger,
+                },
+            ):
+                with mcp_trace_context(run_id=run_id, trace_id=trace_id):
+                    output = graph.invoke(
+                        state,
+                        config={
+                            "run_name": "amazon_ops.advertising_diagnostic",
+                            "tags": ["amazon-ops", "advertising-diagnostic", request.trigger],
+                            "metadata": {
+                                "workflow": "advertising_diagnostic",
+                                "trace_id": trace_id,
+                                "run_id": run_id,
+                                "profile_ids": request.profile_ids,
+                                "goal": request.goal.growth_priority,
+                                "baseline_comparison": bool(request.baseline_period),
+                            },
                         },
-                    },
-                )
+                    )
             result = AdDiagnosticResult.model_validate(output["final_result"])
             record = AdvertisingRunRecord(
                 run_id=run_id,

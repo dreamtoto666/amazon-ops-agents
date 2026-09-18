@@ -41,7 +41,6 @@ class RuleBasedDataInspectionAgent:
 
     _DEFAULT_TARGET_ACOS = {"profit": 0.35, "balanced": 0.50, "scale": 0.70}
     _DEFAULT_MIN_CTR = {"profit": 0.0025, "balanced": 0.0025, "scale": 0.0020}
-    _MIN_CTR_IMPRESSIONS = 1000
     _HYPOTHESIS_TEMPLATES = {
         AnomalyType.ZERO_ORDER_WASTE: [
             ("conversion", "存在高消耗无订单流量，需要定位具体搜索词或投放目标", "ad_campaign_search_term_report"),
@@ -196,12 +195,9 @@ class RuleBasedDataInspectionAgent:
         baseline: AdMetricSnapshot | None,
         evidence_refs: list[str],
     ) -> list[DetectedAnomaly]:
-        threshold = request.thresholds
         anomalies: list[DetectedAnomaly] = []
-        sample_ok = current.spend >= threshold.min_spend or current.clicks >= threshold.min_clicks
         if (
-            current.spend >= threshold.min_spend
-            and current.clicks >= threshold.zero_order_clicks
+            current.clicks > 0
             and current.orders == 0
         ):
             anomalies.append(
@@ -212,23 +208,20 @@ class RuleBasedDataInspectionAgent:
                     current.orders,
                     baseline.orders if baseline else None,
                     evidence_refs,
-                    severity="high" if current.spend < threshold.min_spend * 3 else "critical",
-                    confidence=0.92,
+                    severity="high",
+                    confidence=0.72,
                 )
             )
         if not baseline:
             self._detect_current_period_efficiency(
                 request=request,
                 current=current,
-                threshold=threshold,
                 evidence_refs=evidence_refs,
                 anomalies=anomalies,
             )
             return anomalies
-        if not sample_ok:
-            return anomalies
 
-        relative = threshold.relative_change
+        relative = request.thresholds.relative_change
         rules = [
             (AnomalyType.SPEND_SPIKE, "spend", current.spend, baseline.spend, "rise"),
             (AnomalyType.SALES_DROP, "sales", current.sales, baseline.sales, "drop"),
@@ -263,7 +256,7 @@ class RuleBasedDataInspectionAgent:
                     baseline_value,
                     evidence_refs,
                     severity=self._severity(magnitude),
-                    confidence=0.86 if current.clicks >= threshold.min_clicks * 2 else 0.72,
+                    confidence=0.72,
                 )
             )
         return anomalies
@@ -273,7 +266,6 @@ class RuleBasedDataInspectionAgent:
         *,
         request: AdDiagnosticRequest,
         current: AdMetricSnapshot,
-        threshold: Any,
         evidence_refs: list[str],
         anomalies: list[DetectedAnomaly],
     ) -> None:
@@ -288,7 +280,7 @@ class RuleBasedDataInspectionAgent:
         min_ctr = self._DEFAULT_MIN_CTR[goal]
 
         if (
-            current.spend >= threshold.min_spend
+            current.spend > 0
             and current.sales > 0
             and current.acos is not None
             and current.acos >= target_acos
@@ -303,12 +295,12 @@ class RuleBasedDataInspectionAgent:
                     None,
                     evidence_refs,
                     severity=self._severity(magnitude),
-                    confidence=0.86 if current.clicks >= threshold.min_clicks * 2 else 0.72,
+                    confidence=0.72,
                 )
             )
 
         if (
-            current.impressions >= self._MIN_CTR_IMPRESSIONS
+            current.impressions > 0
             and current.ctr is not None
             and current.ctr < min_ctr
         ):
@@ -978,14 +970,14 @@ class EvidenceBasedProblemAttributionAgent:
             )
             for anomaly in anomalies_by_campaign[campaign_id]:
                 fact: tuple[str, str, float, float, str | None] | None = None
-                if text and spend >= request.thresholds.min_spend and orders == 0 and sales == 0 and report.tool in {
+                if text and spend > 0 and orders == 0 and sales == 0 and report.tool in {
                     "ad_campaign_search_term_report", "ad_campaign_keyword_report", "ad_campaign_targeting_report"
                 }:
                     label = "搜索词" if report.tool == "ad_campaign_search_term_report" else "关键词" if report.tool == "ad_campaign_keyword_report" else "投放目标"
                     fact = (
                         "conversion",
                         f"{label}“{text}”花费 {spend:.2f}、订单 0、销售额 0，是当前异常的直接无转化消耗证据。",
-                        min(1.0, spend / max(request.thresholds.min_spend * 3, 1)),
+                        0.6,
                         0.92,
                         text,
                     )

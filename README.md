@@ -38,6 +38,8 @@ Docker Compose 会启动 PostgreSQL、Agent API 和前端。任务创建幂等�
 
 已导入广告报表的只读查询也可作为内部 MCP 工具运行。使用 `./scripts/start-nl2sql-mcp.sh` 启动 stdio Server；它查询团队共享的广告数据，仍要求 `DATABASE_READONLY_URL`。
 
+竞品对标通过内部 stdio MCP `amazon_ops.competitor_research_mcp` 调用 Sif 的只读工具；它仅由聊天总控启动，不对浏览器开放。需要在本机 `.env` 配置 `SIF_MCP_SECRET`，并由聊天请求提供自有 ASIN、1–5 个竞品 ASIN 与站点。开发调试可运行 `./scripts/start-competitor-research-mcp.sh`。
+
 生产服务器部署请使用 [生产部署指南](docs/production-deployment.md)。该方案通过 Nginx + Certbot
 提供 HTTPS；PostgreSQL 和 API 不开放公网端口，发布包不包含密钥。
 
@@ -192,3 +194,5 @@ npm run dev
 
 打开 `http://localhost:3000/dashboard/overview`。真实接口接入前，可访问
 `/dashboard/agent-runs/demo` 查看完整的阶段流转效果。
+
+团队 Obsidian 知识库由管理员上传 ZIP。服务端只索引其中的 Markdown，并按笔记标题、路径、标签、双链、广告标识和正文短语进行 Wiki 检索；不需要外部嵌入服务。Docker 部署使用独立持久化卷保存知识库归档。

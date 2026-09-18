@@ -19,6 +19,7 @@ class StageName(str, Enum):
     UNDERSTANDING = "understanding"
     PLANNING = "planning"
     ANALYSIS = "analysis"
+    DATA_PROCESSING = "data_processing"
     VERIFICATION = "verification"
     SYNTHESIS = "synthesis"
     WAITING_INPUT = "waiting_input"
@@ -207,11 +208,13 @@ ALLOWED_TRANSITIONS: dict[StageName, set[StageName]] = {
     StageName.WAITING_INPUT: {StageName.UNDERSTANDING},
     StageName.PLANNING: {StageName.ANALYSIS},
     StageName.ANALYSIS: {
+        StageName.DATA_PROCESSING,
         StageName.VERIFICATION,
         StageName.SYNTHESIS,
         StageName.WAITING_INPUT,
     },
-    StageName.VERIFICATION: {StageName.SYNTHESIS},
+    StageName.DATA_PROCESSING: {StageName.VERIFICATION, StageName.SYNTHESIS},
+    StageName.VERIFICATION: {StageName.DATA_PROCESSING, StageName.SYNTHESIS},
     StageName.SYNTHESIS: {StageName.WAITING_APPROVAL},
     StageName.WAITING_APPROVAL: {StageName.UNDERSTANDING, StageName.SYNTHESIS},
 }
@@ -358,8 +361,11 @@ class StageReporter:
     run_id: str
     stage: StageName
     base_data: dict[str, Any] = field(default_factory=dict)
+    suppressed_kinds: frozenset[str] = field(default_factory=frozenset)
 
     def emit(self, kind: str, **data: Any) -> None:
+        if kind in self.suppressed_kinds:
+            return
         self.controller.progress(
             self.run_id,
             self.stage,
@@ -374,6 +380,7 @@ class StageReporter:
             run_id=self.run_id,
             stage=self.stage,
             base_data={**self.base_data, **base_data},
+            suppressed_kinds=self.suppressed_kinds,
         )
 
 

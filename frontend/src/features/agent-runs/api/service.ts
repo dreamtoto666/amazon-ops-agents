@@ -17,8 +17,10 @@ export interface RunEventSubscription {
 
 export type AgentModelName =
   | 'deepseek-v4-flash'
-  | 'deepseek-v4-pro'
-  | 'deepseek-v4-flash-vision-exp';
+  | 'deepseek-v4-flash-vision-exp'
+  | 'gpt-5.6-luna'
+  | 'gpt-5.6-terra'
+  | 'gpt-5.6-sol';
 
 export type AgentReasoningEffort = 'off' | 'low' | 'high' | 'max';
 
@@ -62,10 +64,9 @@ export async function getConversationMessages(
 }
 
 export async function deleteConversation(conversationId: string): Promise<void> {
-  const response = await fetch(
-    `/api/agent/conversations/${encodeURIComponent(conversationId)}`,
-    { method: 'DELETE' }
-  );
+  const response = await fetch(`/api/agent/conversations/${encodeURIComponent(conversationId)}`, {
+    method: 'DELETE'
+  });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
       detail?: string;
@@ -80,7 +81,8 @@ export async function createAgentRun(
   model: AgentModelName,
   reasoningEffort: AgentReasoningEffort = 'off',
   idempotencyKey = createUuid(),
-  imageDataUrls: string[] = []
+  imageDataUrls: string[] = [],
+  useTeamKnowledge = true
 ): Promise<CreateRunResult> {
   const response = await fetch('/api/agent/runs', {
     method: 'POST',
@@ -93,6 +95,7 @@ export async function createAgentRun(
       conversation_id: conversationId,
       model,
       reasoning_effort: reasoningEffort,
+      use_team_knowledge: useTeamKnowledge,
       image_attachments: imageDataUrls.map((dataUrl) => ({ data_url: dataUrl }))
     })
   });
@@ -127,7 +130,16 @@ export function subscribeToRunEvents(
 
   for (const eventName of STAGE_EVENT_NAMES) {
     source.addEventListener(eventName, (message) => {
-      const parsedJson: unknown = JSON.parse((message as MessageEvent<string>).data);
+      // An exception thrown inside an EventSource listener is swallowed by the
+      // browser, so a malformed frame must be surfaced as an error rather than
+      // escaping here and silently dropping the event.
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse((message as MessageEvent<string>).data);
+      } catch {
+        handlers.onError(new Error(`收到无法解析的 SSE 事件：${eventName}`));
+        return;
+      }
       const parsed = stageEventSchema.safeParse(parsedJson);
       if (!parsed.success) {
         handlers.onError(new Error(`收到不符合协议的 SSE 事件：${eventName}`));

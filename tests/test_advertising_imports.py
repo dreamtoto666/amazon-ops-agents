@@ -2,7 +2,14 @@ import io
 
 from openpyxl import Workbook
 
-from amazon_ops.advertising.imports import AdvertisingImportService, HEADERS, InMemoryImportStore, ReportType
+from amazon_ops.advertising.imports import AdvertisingImportService, HEADERS, InMemoryImportStore, ReportType, _readonly_role
+
+
+def test_readonly_role_is_extracted_without_exposing_the_connection_secret(monkeypatch):
+    monkeypatch.setenv("DATABASE_READONLY_URL", "postgresql://amazon_ops_nl2sql:not-for-output@127.0.0.1:5432/amazon_ops")
+    assert _readonly_role() == "amazon_ops_nl2sql"
+    monkeypatch.setenv("DATABASE_READONLY_URL", "")
+    assert _readonly_role() is None
 
 
 def csv_for(report_type: ReportType, *, spend: str = "10") -> bytes:
@@ -63,6 +70,26 @@ def test_generic_template_accepts_rows_without_optional_entity_dimensions():
     content = (",".join(headers) + "\n" + ",".join(values.get(header, "") for header in headers) + "\n").encode()
     result = AdvertisingImportService(InMemoryImportStore()).import_file(uploaded_by="owner-a", report_type=ReportType.GENERIC, file_name="generic.csv", content=content)
     assert result.inserted_rows == 1
+
+
+def test_import_preserves_optional_portfolio_name_for_advertising_queries():
+    service = AdvertisingImportService(InMemoryImportStore())
+    row, error = service._normalize_native(
+        ReportType.CAMPAIGN,
+        {
+            "日期": "2026-08-01",
+            "广告活动名称": "SP-核心词",
+            "广告组合名称": "WJ-US-镂空-浩森",
+            "展示量": "100",
+            "点击量": "10",
+            "花费": "10",
+        },
+        "store-1",
+    )
+
+    assert error is None
+    assert row is not None
+    assert row["portfolio_name"] == "WJ-US-镂空-浩森"
 
 
 def test_generic_template_accepts_reordered_common_english_headers():

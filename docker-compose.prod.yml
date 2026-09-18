@@ -55,6 +55,7 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
+      TEAM_KNOWLEDGE_ARCHIVE_DIR: /data/team-knowledge
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,6 +65,8 @@ services:
       timeout: 5s
       retries: 6
     networks: [amazon_ops_private]
+    volumes:
+      - amazon_ops_team_knowledge:/data/team-knowledge
 
   frontend:
     image: ${AMAZON_OPS_FRONTEND_IMAGE:?请使用本机镜像发布包部署}
@@ -86,3 +89,5 @@ networks:
 volumes:
   amazon_ops_postgres_data:
     name: amazon_ops_postgres_data
+  amazon_ops_team_knowledge:
+    name: amazon_ops_team_knowledge

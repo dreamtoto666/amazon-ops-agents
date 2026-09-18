@@ -1,3 +1,7 @@
+import io
+import struct
+import zipfile
+
 from fastapi.testclient import TestClient
 
 from amazon_ops.api import DEFAULT_DATABASE_URL, _env_float, _env_int, _env_text, create_app
@@ -5,6 +9,7 @@ from amazon_ops.auth import AuthUser
 from amazon_ops.auth import normalize_username
 from amazon_ops.idempotency import InMemoryIdempotencyRegistry
 from amazon_ops.memory import InMemoryConversationStore
+from amazon_ops.team_knowledge import InMemoryKnowledgeStore, TeamKnowledgeService
 
 
 class StubRunManager:
@@ -70,6 +75,22 @@ def create_test_client(manager: StubRunManager) -> TestClient:
     )
 
 
+def _vault_zip(files: dict[str, str]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for path, content in files.items():
+            archive.writestr(path, content)
+    return buffer.getvalue()
+
+
+def _damaged_vault_zip() -> bytes:
+    """An archive whose declared entry size disagrees with its own data."""
+
+    raw = bytearray(_vault_zip({"a.md": "# A\n" + "内容" * 300}))
+    struct.pack_into("<I", raw, raw.find(b"PK\x01\x02") + 24, 64)
+    return bytes(raw)
+
+
 def test_empty_host_environment_overrides_use_safe_defaults(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "")
     monkeypatch.setenv("IDEMPOTENCY_TTL_SECONDS", "")
@@ -118,6 +139,63 @@ def test_api_exposes_real_configuration_status_and_creates_run():
     assert created.json()["conversation_id"].startswith("conversation-")
     assert created.headers["Idempotency-Replayed"] == "false"
     assert manager.submit_calls == 1
+
+
+def test_api_accepts_a_request_without_team_knowledge():
+    manager = StubRunManager()
+    client = create_test_client(manager)
+
+    created = client.post(
+        "/api/runs",
+        json={"message": "ACOS 是什么？", "use_team_knowledge": False},
+        headers={"Idempotency-Key": "chat-test-knowledge-off-0001"},
+    )
+
+    assert created.status_code == 202
+    assert manager.last_request.use_team_knowledge is False
+
+
+def test_team_knowledge_status_is_shared_but_upload_requires_admin():
+    operator = create_test_client(StubRunManager())
+    app = create_app(
+        StubRunManager(),
+        idempotency_registry=InMemoryIdempotencyRegistry(),
+        auth_store=StubAdminAuthStore(),
+    )
+    admin = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+    assert operator.get("/api/team-knowledge/vault").status_code == 200
+    assert operator.post(
+        "/api/team-knowledge/vault",
+        files={"file": ("vault.zip", b"not-a-zip", "application/zip")},
+    ).status_code == 403
+    assert admin.get("/api/team-knowledge/vault").status_code == 200
+
+
+def test_team_knowledge_upload_reports_a_damaged_archive_as_422(tmp_path):
+    """A corrupt upload is client input: 422 with a readable reason, never 503."""
+
+    app = create_app(
+        StubRunManager(),
+        idempotency_registry=InMemoryIdempotencyRegistry(),
+        auth_store=StubAdminAuthStore(),
+        team_knowledge_service=TeamKnowledgeService(InMemoryKnowledgeStore(), tmp_path),
+    )
+    admin = TestClient(app, headers={"Authorization": "Bearer test-token"})
+
+    healthy = admin.post(
+        "/api/team-knowledge/vault",
+        files={"file": ("vault.zip", _vault_zip({"规则.md": "# 广告规则\n预算按周复核。"}), "application/zip")},
+    )
+    damaged = admin.post(
+        "/api/team-knowledge/vault",
+        files={"file": ("vault.zip", _damaged_vault_zip(), "application/zip")},
+    )
+
+    assert healthy.status_code == 200
+    assert healthy.json()["status"] == "active"
+    assert damaged.status_code == 422
+    assert "损坏" in damaged.json()["detail"]
 
 
 def test_api_accepts_the_pro_model_for_one_run():

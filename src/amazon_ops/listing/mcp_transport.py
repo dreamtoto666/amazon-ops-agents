@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
@@ -22,17 +24,17 @@ from .mcp import (
 T = TypeVar("T")
 
 
-def _exception_text(exc: BaseException) -> str:
-    """Flatten exception groups so MCP JSON-RPC errors retain their meaning."""
+def _walk_exceptions(exc: BaseException) -> list[BaseException]:
+    """Collect an exception and everything nested under it, groups included."""
 
     seen: set[int] = set()
-    parts: list[str] = []
+    found: list[BaseException] = []
 
     def visit(current: BaseException) -> None:
         if id(current) in seen:
             return
         seen.add(id(current))
-        parts.append(str(current))
+        found.append(current)
         children = getattr(current, "exceptions", ())
         if isinstance(children, tuple):
             for child in children:
@@ -43,7 +45,27 @@ def _exception_text(exc: BaseException) -> str:
                 visit(child)
 
     visit(exc)
-    return " ".join(part for part in parts if part)
+    return found
+
+
+def _exception_text(exc: BaseException) -> str:
+    """Flatten exception groups so MCP JSON-RPC errors retain their meaning."""
+
+    return " ".join(text for text in (str(item) for item in _walk_exceptions(exc)) if text)
+
+
+def _gateway_error(exc: BaseException) -> MCPGatewayError | None:
+    """Return a structured gateway error raised inside the operation, if any.
+
+    The MCP SDK runs operations inside an asyncio TaskGroup, so an error raised
+    while handling a result arrives wrapped in an ExceptionGroup.  Without
+    unwrapping, its code would be replaced by a generic transport failure.
+    """
+
+    for item in _walk_exceptions(exc):
+        if isinstance(item, MCPGatewayError):
+            return item
+    return None
 
 
 def _classify_transport_failure(exc: BaseException) -> tuple[str, bool]:
@@ -57,6 +79,54 @@ def _classify_transport_failure(exc: BaseException) -> tuple[str, bool]:
     if "timeout" in text or isinstance(exc, (TimeoutError, ConnectionError)):
         return "MCP_TRANSPORT_FAILURE", True
     return "MCP_TRANSPORT_FAILURE", False
+
+
+# Upstream error results may carry credential identifiers in their text, so only
+# an already upper-snake token is ever accepted as a code and the rest is dropped.
+_ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
+
+
+def _tool_error_code(result: Any) -> str:
+    """Recover a short machine code from a tool-level MCP error result.
+
+    Only a strict code shape is read out; free text is never echoed, because
+    provider error bodies can contain key identifiers.
+    """
+
+    for block in getattr(result, "content", None) or []:
+        text = getattr(block, "text", None)
+        if not isinstance(text, str):
+            continue
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for key in ("error", "code"):
+            candidate = payload.get(key)
+            if isinstance(candidate, str) and _ERROR_CODE_PATTERN.match(candidate.strip()):
+                return candidate.strip()
+    return "MCP_TOOL_ERROR"
+
+
+def _tool_payload(result: Any, *, config: MCPServerConfig, tool: str) -> Any:
+    """Serialize a tool result, raising when the server reported a failure.
+
+    MCP reports a *tool* failure as a successful call whose result sets
+    ``isError``, with the reason in the content blocks.  Without this check the
+    failure would be recorded as a successful call and the error body would be
+    filed away as evidence.
+    """
+
+    if getattr(result, "is_error", False):
+        raise MCPGatewayError(
+            f"tool {tool} returned an error result",
+            provider=config.provider,
+            tool=tool,
+            code=_tool_error_code(result),
+        )
+    return result.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 class StreamableHTTPMCPTransport:
@@ -102,7 +172,7 @@ class StreamableHTTPMCPTransport:
     ) -> Any:
         async def operation(client: Client) -> Any:
             result = await client.call_tool(tool, arguments)
-            return result.model_dump(mode="json", by_alias=True, exclude_none=True)
+            return _tool_payload(result, config=config, tool=tool)
 
         return self._execute(config, operation)
 
@@ -147,6 +217,9 @@ class StreamableHTTPMCPTransport:
         except MCPGatewayError:
             raise
         except Exception as exc:
+            nested = _gateway_error(exc)
+            if nested is not None:
+                raise nested from exc
             code, retryable = _classify_transport_failure(exc)
             raise MCPGatewayError(
                 f"{config.provider.value} MCP connection failed: {type(exc).__name__}",

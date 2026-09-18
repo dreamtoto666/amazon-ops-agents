@@ -13,7 +13,8 @@ from amazon_ops.listing import (
     sif_mcp_config,
 )
 from amazon_ops.listing.mcp import _payload_summary, _trace_tool_inputs
-from amazon_ops.listing.mcp_transport import _classify_transport_failure
+from amazon_ops.listing.mcp import MCPProvider
+from amazon_ops.listing.mcp_transport import _classify_transport_failure, _tool_payload
 
 
 class FakeTransport:
@@ -163,3 +164,119 @@ def test_tool_trace_payload_summary_only_reports_counts_and_fields():
     assert summary["record_count"] == 2
     assert summary["reported_total"] == 30
     assert summary["field_summary"] == ["campaignId", "cost", "sales"]
+
+
+# --- MCP 工具级失败（isError）必须记为失败 -----------------------------------
+#
+# 回归背景：MCP 把「工具执行失败」表达为一次*成功*调用 + ``isError: true``。
+# transport 曾把整个信封原样当数据返回，于是上游失败被记成成功、错误文本被当作
+# 证据留存（实测 Sif 配额超限时 ok=True、evidence 6 条、无 errors）。
+
+
+class FakeContentBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeToolResult:
+    def __init__(self, *, is_error=False, blocks=(), structured=None):
+        self.is_error = is_error
+        self.content = [FakeContentBlock(text) for text in blocks]
+        self.structured_content = structured
+
+    def model_dump(self, **_kwargs):
+        return {
+            "content": [{"type": "text", "text": block.text} for block in self.content],
+            "isError": self.is_error,
+            "structuredContent": self.structured_content,
+        }
+
+
+def _sif_config():
+    return sif_mcp_config()
+
+
+def test_a_tool_level_error_result_becomes_a_failed_call():
+    result = FakeToolResult(
+        is_error=True,
+        blocks=['{"error":"QUOTA_EXCEEDED","message":"未分配MCP用量","secretId":"sifmcp260803xefnk9nhvvckat79"}'],
+    )
+
+    with pytest.raises(MCPGatewayError) as exc_info:
+        _tool_payload(result, config=_sif_config(), tool="ops_get_asin_traffic_trend")
+
+    assert exc_info.value.code == "QUOTA_EXCEEDED"
+    assert exc_info.value.provider is MCPProvider.SIF
+
+
+def test_a_provider_error_body_never_leaks_into_the_error():
+    """上游报文可能含密钥标识，绝不能进入 code 或 message。"""
+
+    secret_id = "sifmcp260803xefnk9nhvvckat79"
+    result = FakeToolResult(
+        is_error=True,
+        blocks=[f'{{"error":"QUOTA_EXCEEDED","message":"key unmasked","secretId":"{secret_id}"}}'],
+    )
+
+    with pytest.raises(MCPGatewayError) as exc_info:
+        _tool_payload(result, config=_sif_config(), tool="ops_get_asin_traffic_trend")
+
+    assert secret_id not in str(exc_info.value)
+    assert secret_id not in exc_info.value.code
+    assert secret_id.upper() not in str(exc_info.value)
+
+
+def test_an_unrecognised_error_body_falls_back_to_a_generic_code():
+    for blocks in ([], ["not json at all"], ['{"detail":"boom"}'], ['{"error":"quota exceeded"}']):
+        result = FakeToolResult(is_error=True, blocks=blocks)
+
+        with pytest.raises(MCPGatewayError) as exc_info:
+            _tool_payload(result, config=_sif_config(), tool="ops_get_asin_traffic_trend")
+
+        assert exc_info.value.code == "MCP_TOOL_ERROR"
+
+
+def test_a_successful_result_is_returned_as_the_serialized_payload():
+    result = FakeToolResult(is_error=False, blocks=['{"data":1}'], structured={"data": 1})
+
+    payload = _tool_payload(result, config=_sif_config(), tool="ops_get_asin_traffic_trend")
+
+    assert payload["isError"] is False
+    assert payload["structuredContent"] == {"data": 1}
+
+
+def test_an_error_result_never_reaches_the_caller_as_evidence():
+    """端到端不变量：失败的上游调用不得留下任何看起来像证据的东西。"""
+
+    class ErroringTransport(FakeTransport):
+        def call_tool(self, config, tool, arguments):
+            # 走真实 transport 的判定函数，而不是绕过它
+            raw = FakeToolResult(is_error=True, blocks=['{"error":"QUOTA_EXCEEDED"}'])
+            return _tool_payload(raw, config=config, tool=tool)
+
+    client = MCPProviderClient(config=sif_mcp_config(), transport=ErroringTransport())
+
+    with pytest.raises(MCPGatewayError) as exc_info:
+        client.call("ops_get_asin_traffic_trend", {"asin": "B0OWN00001", "country": "US"})
+
+    assert exc_info.value.code == "QUOTA_EXCEEDED"
+
+
+def test_a_gateway_error_raised_inside_the_operation_keeps_its_code():
+    """MCP SDK 把操作包在 asyncio.TaskGroup 里，错误到达时会套一层 ExceptionGroup。
+
+    回归背景：不拆包的话，工具级失败的 code 会被替换成通用的
+    MCP_TRANSPORT_FAILURE（实测 QUOTA_EXCEEDED 就是这样丢的）。
+    """
+
+    from amazon_ops.listing.mcp_transport import _gateway_error
+
+    inner = MCPGatewayError(
+        "tool x returned an error result", provider=MCPProvider.SIF, tool="x", code="QUOTA_EXCEEDED"
+    )
+    wrapped = ExceptionGroup("unhandled errors in a TaskGroup", [inner])
+    doubly_wrapped = ExceptionGroup("unhandled errors in a TaskGroup", [wrapped])
+
+    assert _gateway_error(doubly_wrapped) is inner
+    assert _gateway_error(RuntimeError("unrelated")) is None
+    assert _gateway_error(inner) is inner

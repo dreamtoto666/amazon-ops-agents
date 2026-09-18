@@ -294,6 +294,7 @@ function visibleDiagnosticWarnings(warnings: string[] | undefined) {
 function historyRunTitle(record: AdvertisingRunRecord) {
   const scope = record.display_scope;
   if (!scope?.shop_label) return record.result?.summary ?? record.error?.message ?? "广告巡检进行中";
+  if (scope.title) return scope.title;
   const period = scope.current_period;
   const range = period ? `${period.start} 至 ${period.end}` : "当前周期";
   return `${scope.shop_label} · ${range} 广告巡检`;

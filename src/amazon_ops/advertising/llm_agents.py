@@ -36,7 +36,6 @@ from .state import AdvertisingDiagnosticState
 class DeepSeekDataInspectionAgent:
     """Keeps metrics deterministic; uses DeepSeek only for candidate hypotheses."""
 
-    MAX_LLM_ANOMALIES = 30
     MAX_ANOMALIES_PER_CALL = 10
 
     def __init__(self, gateway: AdvertisingDataGateway, llm: StructuredLLM) -> None:
@@ -54,7 +53,7 @@ class DeepSeekDataInspectionAgent:
             inspection.anomalies,
             key=lambda item: (severity_rank[item.severity], item.confidence),
             reverse=True,
-        )[: self.MAX_LLM_ANOMALIES]
+        )
         hypotheses_by_anomaly: dict[str, list[InspectionHypothesis]] = {}
         model_warnings: list[str] = []
         for start in range(0, len(selected), self.MAX_ANOMALIES_PER_CALL):
@@ -112,10 +111,6 @@ class DeepSeekDataInspectionAgent:
             else:
                 merged.extend(fallback_by_anomaly.get(anomaly.anomaly_id, []))
         warnings = [*inspection.warnings, *model_warnings]
-        if len(inspection.anomalies) > self.MAX_LLM_ANOMALIES:
-            warnings.append(
-                f"异常较多，DeepSeek 优先生成严重程度最高的 {self.MAX_LLM_ANOMALIES} 个异常的候选假设。"
-            )
         return inspection.model_copy(update={"hypotheses": merged, "warnings": warnings})
 
 

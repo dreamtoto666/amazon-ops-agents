@@ -12,6 +12,8 @@ from amazon_ops.models import (
     SpecialistResult,
     UnderstandRequestResult,
     UserIntent,
+    CompetitorAdvertisingReport,
+    CompetitorReportSection,
 )
 
 
@@ -42,6 +44,35 @@ class FakeSpecialist:
                     hypotheses=hypotheses,
                 )
             ],
+        )
+
+
+class FakeCompetitorReportWriter:
+    def __init__(self):
+        self.state = None
+
+    def invoke(self, state):
+        self.state = state
+        return CompetitorAdvertisingReport(
+            title="亚马逊竞品广告对比报告",
+            sections=[
+                CompetitorReportSection(
+                    key="traffic_keyword_lookup",
+                    status="partial",
+                    content="本期仅基于已读取的竞品观察与我方广告报表证据生成。",
+                    missing_reasons=["部分章节数据不足"],
+                )
+            ],
+            limitations=["竞品私有广告后台指标不可得。"],
+        )
+
+    def invoke_section(self, state, section_key):
+        self.state = state
+        return CompetitorReportSection(
+            key=section_key,
+            status="partial",
+            content=f"{section_key} 仅基于已读取的竞品观察生成。",
+            missing_reasons=["部分章节数据不足"],
         )
 
 
@@ -139,3 +170,31 @@ def test_graph_routes_attached_image_to_direct_response():
 
     assert result["route"] == RequestRoute.RESPOND.value
     assert result["final_response"]["answer"]
+
+
+def test_graph_uses_report_writer_only_for_explicit_competitor_report_requests():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.COMPETITOR, action=Action.COMPARE, confidence=0.95),
+        scope=QueryScope(marketplaces=["US"], own_asin="B0OWN00001", competitor_asins=["B0COMP0001"]),
+        route=RequestRoute.EXECUTE,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="生成竞品对比报告",
+        response_mode="competitor_report",
+    )
+    writer = FakeCompetitorReportWriter()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={
+            SpecialistName.COMPETITOR_ADVERTISING.value: FakeSpecialist(SpecialistName.COMPETITOR_ADVERTISING),
+            SpecialistName.ADVERTISING.value: FakeSpecialist(SpecialistName.ADVERTISING),
+        },
+        competitor_report_writer=writer,
+    )
+
+    result = graph.invoke({"messages": [], "request_id": "report-1"})
+
+    assert writer.state is not None
+    assert set(result["called_agents"]) == {"competitor_advertising", "advertising"}
+    assert "## 01｜模块：查流量词" in result["final_response"]["answer"]
+    assert "## 04｜模块：查推荐专栏" in result["final_response"]["answer"]
+    assert result["final_response"]["deliverables"][0]["type"] == "competitor_advertising_report"

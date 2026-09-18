@@ -67,6 +67,18 @@ def _scope(owner_id: str | None, conversation_id: str) -> tuple[str, str]:
     return owner, conversation
 
 
+def _identifies_turn(turn_id: str | None) -> bool:
+    """Only a non-blank turn id can recognise a repeated write of the same turn.
+
+    Recovering an interrupted run replays the node that was still in flight, so
+    the same turn can try to record its answer twice.  ``(role, turn_id)`` inside
+    one scope identifies that retry; the first write wins so the answer the user
+    already saw is kept.  Writes without a turn id keep inserting as before.
+    """
+
+    return bool(turn_id and turn_id.strip())
+
+
 def _render_summary(summary: ConversationSummaryDraft) -> str:
     sections = (
         ("已确认上下文", summary.confirmed_context),
@@ -115,7 +127,9 @@ class ConversationStore(Protocol):
     max_turns: int
 
     def history(self, owner_id: str | None, conversation_id: str) -> list[ConversationMessage]: ...
-    def append(self, owner_id: str | None, conversation_id: str, *, role: Literal["user", "assistant"], content: str, turn_id: str | None = None) -> None: ...
+    def append(self, owner_id: str | None, conversation_id: str, *, role: Literal["user", "assistant"], content: str, turn_id: str | None = None) -> None:
+        """Append a message, ignoring a repeat of an already recorded turn."""
+        ...
     def compact(self, owner_id: str | None, conversation_id: str, summarizer: ConversationSummarizer) -> bool: ...
     def clear(self, owner_id: str | None, conversation_id: str) -> None: ...
     def conversations(self, owner_id: str | None, *, limit: int = 50) -> list[ConversationSummary]: ...
@@ -161,9 +175,15 @@ class InMemoryConversationStore:
         text = content.strip()
         if not text:
             return
+        scope = _scope(owner_id, conversation_id)
         with self._lock:
+            if _identifies_turn(turn_id) and any(
+                item["turn_id"] == turn_id and item["role"] == role
+                for item in self._messages.get(scope, [])
+            ):
+                return
             self._next_message_id += 1
-            self._messages.setdefault(_scope(owner_id, conversation_id), []).append({"message_id": self._next_message_id, "role": role, "content": text, "turn_id": turn_id, "compacted": False})
+            self._messages.setdefault(scope, []).append({"message_id": self._next_message_id, "role": role, "content": text, "turn_id": turn_id, "compacted": False})
 
     def compact(self, owner_id: str | None, conversation_id: str, summarizer: ConversationSummarizer) -> bool:
         scope = _scope(owner_id, conversation_id)
@@ -262,7 +282,18 @@ class PostgresConversationStore:
         try:
             with self._pool.connection() as connection:
                 with connection.transaction():
-                    connection.execute("INSERT INTO conversation_messages (owner_id, conversation_id, role, content, turn_id) VALUES (%s, %s, %s, %s, %s)", (owner, conversation, role, text, turn_id))
+                    # ``turn_id = NULL`` never matches, so a write without a turn id
+                    # keeps the previous insert-always behaviour.
+                    connection.execute(
+                        "INSERT INTO conversation_messages (owner_id, conversation_id, role, content, turn_id)"
+                        " SELECT %s, %s, %s, %s, %s WHERE NOT EXISTS ("
+                        "SELECT 1 FROM conversation_messages"
+                        " WHERE owner_id = %s AND conversation_id = %s AND turn_id = %s AND role = %s)",
+                        (
+                            owner, conversation, role, text, turn_id,  # type: ignore[arg-type]
+                            owner, conversation, turn_id, role,  # type: ignore[arg-type]
+                        ),
+                    )
         except (PsycopgError, PoolTimeout) as exc:
             raise ConversationMemoryStorageError("PostgreSQL conversation memory write failed") from exc
 

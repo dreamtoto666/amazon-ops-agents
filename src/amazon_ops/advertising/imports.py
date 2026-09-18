@@ -10,16 +10,19 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from threading import RLock
 from typing import Any, Protocol
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 from psycopg.types.json import Jsonb
+from psycopg import sql
 from psycopg_pool import ConnectionPool
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
@@ -117,6 +120,7 @@ class ImportResult(BaseModel):
 
 
 class ImportStore(Protocol):
+    def initialize(self) -> None: ...
     def upsert_shared(self, uploaded_by: str, report_type: ReportType, rows: list[dict[str, Any]]) -> tuple[int, int]: ...
     def query_shared_summary(self) -> dict[str, Any]: ...
     def create_preview(self, owner_id: str, report_type: ReportType, file_name: str, rows: list[dict[str, Any]], errors: list[ImportErrorRow]) -> ImportPreview: ...
@@ -128,6 +132,10 @@ class ImportStore(Protocol):
 
 
 def _now() -> datetime: return datetime.now(timezone.utc)
+def _readonly_role() -> str | None:
+    """Return the configured read-only login without retaining its password."""
+    raw_url = os.getenv("DATABASE_READONLY_URL", "").strip()
+    return unquote(urlparse(raw_url).username or "").strip() or None
 def _identity(report_type: ReportType, row: dict[str, Any]) -> str:
     keys = [row["profile_id"], row["report_date"], row["campaign_id"]]
     if report_type in {ReportType.AD_GROUP, ReportType.KEYWORD, ReportType.TARGETING, ReportType.SEARCH_TERM}: keys.append(row["ad_group_id"])
@@ -146,6 +154,7 @@ def _identity(report_type: ReportType, row: dict[str, Any]) -> str:
 class InMemoryImportStore:
     def __init__(self) -> None:
         self._lock = RLock(); self._batches: dict[str, dict[str, Any]] = {}; self._rows: dict[tuple[str, str, str], dict[str, Any]] = {}; self._shared_rows: dict[tuple[str, str], dict[str, Any]] = {}
+    def initialize(self) -> None: return None
     def upsert_shared(self, uploaded_by: str, report_type: ReportType, rows: list[dict[str, Any]]) -> tuple[int, int]:
         with self._lock:
             overwritten = sum((report_type.value, row["identity_key"]) in self._shared_rows for row in rows)
@@ -197,8 +206,13 @@ class PostgresImportStore:
             if self._ready: return
             self._pool.open(wait=True, timeout=10)
             with self._pool.connection() as conn, conn.transaction():
-                conn.execute("CREATE TABLE IF NOT EXISTS shared_imported_advertising_report_rows (report_type TEXT NOT NULL, identity_key TEXT NOT NULL, profile_id TEXT NOT NULL, report_date DATE NOT NULL, campaign_id TEXT NOT NULL, ad_group_id TEXT NOT NULL DEFAULT '', keyword_id TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', search_term TEXT NOT NULL DEFAULT '', match_type TEXT NOT NULL DEFAULT '', payload JSONB NOT NULL, impressions DOUBLE PRECISION NOT NULL, clicks DOUBLE PRECISION NOT NULL, spend DOUBLE PRECISION NOT NULL, sales DOUBLE PRECISION NOT NULL, orders DOUBLE PRECISION NOT NULL, ad_units DOUBLE PRECISION NOT NULL, uploaded_by UUID, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (report_type, identity_key))")
+                conn.execute("CREATE TABLE IF NOT EXISTS shared_imported_advertising_report_rows (report_type TEXT NOT NULL, identity_key TEXT NOT NULL, profile_id TEXT NOT NULL, report_date DATE NOT NULL, portfolio_name TEXT NOT NULL DEFAULT '', campaign_id TEXT NOT NULL, ad_group_id TEXT NOT NULL DEFAULT '', keyword_id TEXT NOT NULL DEFAULT '', target_id TEXT NOT NULL DEFAULT '', search_term TEXT NOT NULL DEFAULT '', match_type TEXT NOT NULL DEFAULT '', payload JSONB NOT NULL, impressions DOUBLE PRECISION NOT NULL, clicks DOUBLE PRECISION NOT NULL, spend DOUBLE PRECISION NOT NULL, sales DOUBLE PRECISION NOT NULL, orders DOUBLE PRECISION NOT NULL, ad_units DOUBLE PRECISION NOT NULL, uploaded_by UUID, updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (report_type, identity_key))")
+                conn.execute("ALTER TABLE shared_imported_advertising_report_rows ADD COLUMN IF NOT EXISTS portfolio_name TEXT NOT NULL DEFAULT ''")
                 conn.execute("CREATE INDEX IF NOT EXISTS shared_imported_ad_rows_profile_date_idx ON shared_imported_advertising_report_rows (profile_id, report_date)")
+                conn.execute("CREATE INDEX IF NOT EXISTS shared_imported_ad_rows_portfolio_date_idx ON shared_imported_advertising_report_rows (portfolio_name, report_date)")
+                conn.execute("""UPDATE shared_imported_advertising_report_rows
+                    SET portfolio_name = COALESCE(payload #>> '{source,广告组合名称}', payload ->> '广告组合名称', '')
+                    WHERE portfolio_name = ''""")
                 if conn.execute("SELECT to_regclass('public.imported_advertising_report_rows')").fetchone()[0]:
                     conn.execute("""INSERT INTO shared_imported_advertising_report_rows
                         (report_type, identity_key, profile_id, report_date, campaign_id, ad_group_id, keyword_id, target_id, search_term, match_type, payload, impressions, clicks, spend, sales, orders, ad_units, uploaded_by, updated_at)
@@ -207,10 +221,21 @@ class PostgresImportStore:
                         FROM imported_advertising_report_rows
                         ORDER BY report_type, identity_key, updated_at DESC
                         ON CONFLICT (report_type, identity_key) DO NOTHING""")
+                readonly_role = _readonly_role()
+                if readonly_role and conn.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (readonly_role,)).fetchone():
+                    conn.execute(
+                        sql.SQL("GRANT SELECT ON TABLE shared_imported_advertising_report_rows TO {}").format(
+                            sql.Identifier(readonly_role)
+                        )
+                    )
                 conn.execute("COMMENT ON TABLE shared_imported_advertising_report_rows IS '全员共享的已确认广告报表明细；所有登录用户查询同一份数据，不按上传者隔离。'")
                 conn.execute("COMMENT ON COLUMN shared_imported_advertising_report_rows.profile_id IS 'Amazon 广告店铺/授权 Profile ID；用于区分同一团队下的不同店铺。'")
+                conn.execute("COMMENT ON COLUMN shared_imported_advertising_report_rows.portfolio_name IS 'Amazon 广告组合（Portfolio）名称；位于广告活动上层，可用于按组合筛选。'")
                 conn.execute("COMMENT ON COLUMN shared_imported_advertising_report_rows.uploaded_by IS '最近一次写入该共享报表行的用户，仅用于审计，不参与数据隔离。'")
             self._ready = True
+    def initialize(self) -> None:
+        """Prepare the shared table and migrate legacy rows during API startup."""
+        self._ensure()
     def upsert_shared(self, uploaded_by: str, report_type: ReportType, rows: list[dict[str, Any]]) -> tuple[int, int]:
         self._ensure()
         if not rows: return 0, 0
@@ -219,10 +244,10 @@ class PostgresImportStore:
             overwritten = conn.execute("SELECT count(*) FROM shared_imported_advertising_report_rows WHERE report_type=%s AND identity_key = ANY(%s)", (report_type.value, keys)).fetchone()[0]
             with conn.cursor() as cursor:
                 cursor.executemany("""INSERT INTO shared_imported_advertising_report_rows
-                    (report_type,identity_key,profile_id,report_date,campaign_id,ad_group_id,keyword_id,target_id,search_term,match_type,payload,impressions,clicks,spend,sales,orders,ad_units,uploaded_by)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    (report_type,identity_key,profile_id,report_date,portfolio_name,campaign_id,ad_group_id,keyword_id,target_id,search_term,match_type,payload,impressions,clicks,spend,sales,orders,ad_units,uploaded_by)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (report_type,identity_key) DO UPDATE SET
-                    profile_id=EXCLUDED.profile_id,report_date=EXCLUDED.report_date,campaign_id=EXCLUDED.campaign_id,ad_group_id=EXCLUDED.ad_group_id,keyword_id=EXCLUDED.keyword_id,target_id=EXCLUDED.target_id,search_term=EXCLUDED.search_term,match_type=EXCLUDED.match_type,payload=EXCLUDED.payload,impressions=EXCLUDED.impressions,clicks=EXCLUDED.clicks,spend=EXCLUDED.spend,sales=EXCLUDED.sales,orders=EXCLUDED.orders,ad_units=EXCLUDED.ad_units,uploaded_by=EXCLUDED.uploaded_by,updated_at=CURRENT_TIMESTAMP""", [(report_type.value,row['identity_key'],row['profile_id'],row['report_date'],row['campaign_id'],row['ad_group_id'],row['keyword_id'],row['target_id'],row['search_term'],row['match_type'],Jsonb(row),row['impressions'],row['clicks'],row['spend'],row['sales'],row['orders'],row['ad_units'],uploaded_by) for row in rows])
+                    profile_id=EXCLUDED.profile_id,report_date=EXCLUDED.report_date,portfolio_name=EXCLUDED.portfolio_name,campaign_id=EXCLUDED.campaign_id,ad_group_id=EXCLUDED.ad_group_id,keyword_id=EXCLUDED.keyword_id,target_id=EXCLUDED.target_id,search_term=EXCLUDED.search_term,match_type=EXCLUDED.match_type,payload=EXCLUDED.payload,impressions=EXCLUDED.impressions,clicks=EXCLUDED.clicks,spend=EXCLUDED.spend,sales=EXCLUDED.sales,orders=EXCLUDED.orders,ad_units=EXCLUDED.ad_units,uploaded_by=EXCLUDED.uploaded_by,updated_at=CURRENT_TIMESTAMP""", [(report_type.value,row['identity_key'],row['profile_id'],row['report_date'],row['portfolio_name'],row['campaign_id'],row['ad_group_id'],row['keyword_id'],row['target_id'],row['search_term'],row['match_type'],Jsonb(row),row['impressions'],row['clicks'],row['spend'],row['sales'],row['orders'],row['ad_units'],uploaded_by) for row in rows])
         return len(rows) - overwritten, overwritten
     def query_shared_summary(self) -> dict[str, Any]:
         self._ensure()
@@ -381,7 +406,7 @@ class AdvertisingImportService:
         if report_type == ReportType.PURCHASED_PRODUCT: target=data.get("已购买的ASIN", "")
         elif report_type == ReportType.ADVERTISED_PRODUCT: target=data.get("广告ASIN", data.get("广告SKU", ""))
         elif report_type == ReportType.PLACEMENT: target=data.get("放置", "")
-        row={"profile_id":store_key,"report_date":report_date,"campaign_id":data["广告活动名称"],"ad_group_id":data.get("广告组名称", ""),"keyword_id":"","target_id":target,"search_term":data.get("客户搜索词", ""),"match_type":data.get("匹配类型", ""),**metrics,"source":data}
+        row={"profile_id":store_key,"report_date":report_date,"portfolio_name":data.get("广告组合名称", ""),"campaign_id":data["广告活动名称"],"ad_group_id":data.get("广告组名称", ""),"keyword_id":"","target_id":target,"search_term":data.get("客户搜索词", ""),"match_type":data.get("匹配类型", ""),**metrics,"source":data}
         row["identity_key"]=_identity(report_type,row)
         return row,None
     def _normalize(self, report_type: ReportType, data: dict[str,str]) -> tuple[dict[str,Any]|None,tuple[str,str]|None]:
@@ -399,5 +424,5 @@ class AdvertisingImportService:
                 if value < 0: raise ValueError
                 metrics[key]=value
             except ValueError: return None,(name,'必须为非负数值')
-        row={'profile_id':data['Profile ID'],'report_date':report_date,'campaign_id':data['Campaign ID'],'ad_group_id':data.get('Ad Group ID',''),'keyword_id':data.get('Keyword ID',''),'target_id':data.get('Target ID',''),'search_term':data.get('Search Term',''),'match_type':data.get('匹配类型',''),**metrics,'source':data}
+        row={'profile_id':data['Profile ID'],'report_date':report_date,'portfolio_name':data.get('广告组合名称',''),'campaign_id':data['Campaign ID'],'ad_group_id':data.get('Ad Group ID',''),'keyword_id':data.get('Keyword ID',''),'target_id':data.get('Target ID',''),'search_term':data.get('Search Term',''),'match_type':data.get('匹配类型',''),**metrics,'source':data}
         row['identity_key']=_identity(report_type,row); return row,None

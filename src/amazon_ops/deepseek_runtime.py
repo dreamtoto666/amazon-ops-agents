@@ -12,10 +12,13 @@ from dotenv import load_dotenv
 
 from .interfaces import (
     DeepSeekDirectResponder,
+    DeepSeekCompetitorReportWriter,
     DeepSeekRequestInterpreter,
     DeepSeekResultAggregator,
 )
 from .listing.copywriter import DeepSeekListingCopywriter
+from .competitor_router import CompetitorResearchRouter
+from .competitor_data_processor import CompetitorDataProcessor
 from .llm import DeepSeekConfig, DeepSeekModelName, DeepSeekReasoningEffort, DeepSeekStructuredLLM, build_deepseek_llm
 
 
@@ -28,6 +31,9 @@ class DeepSeekModelRoles:
     result_aggregator: DeepSeekResultAggregator
     direct_responder: DeepSeekDirectResponder
     listing_copywriter: DeepSeekListingCopywriter
+    competitor_research_router: CompetitorResearchRouter
+    competitor_data_processor: CompetitorDataProcessor
+    competitor_report_writer: DeepSeekCompetitorReportWriter
     advertising_react_model: ChatOpenAI
 
 
@@ -134,6 +140,9 @@ def build_deepseek_model_roles(
         result_aggregator=DeepSeekResultAggregator(llm),
         direct_responder=DeepSeekDirectResponder(llm),
         listing_copywriter=DeepSeekListingCopywriter(llm),
+        competitor_research_router=CompetitorResearchRouter(llm),
+        competitor_data_processor=CompetitorDataProcessor(llm),
+        competitor_report_writer=DeepSeekCompetitorReportWriter(llm),
         advertising_react_model=build_deepseek_react_model(
             env_file=env_file, model=model, reasoning_effort=reasoning_effort
         ),

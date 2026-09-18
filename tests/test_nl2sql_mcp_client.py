@@ -110,6 +110,17 @@ def test_nl2sql_validation_does_not_apply_a_result_limit():
     assert normalized.endswith("LIMIT 100000")
 
 
+def test_nl2sql_validation_allows_filtering_by_portfolio_name():
+    service = NL2SQLService(llm=None, readonly_url="postgresql://unused")
+
+    normalized = service._validate(
+        "SELECT campaign_id, spend FROM shared_imported_advertising_report_rows "
+        "WHERE portfolio_name = 'WJ-US-镂空-浩森'"
+    )
+
+    assert "portfolio_name" in normalized
+
+
 def test_nl2sql_validation_rejects_legacy_owner_filtering():
     service = NL2SQLService(llm=None, readonly_url="postgresql://unused")
 

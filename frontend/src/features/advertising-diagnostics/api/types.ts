@@ -129,6 +129,7 @@ export interface AdvertisingRunRecord {
   error: { code?: string; message?: string } | null;
   created_at?: string | null;
   display_scope?: {
+    title?: string;
     shop_label: string;
     campaign_count: number;
     current_period?: DiagnosticPeriod;

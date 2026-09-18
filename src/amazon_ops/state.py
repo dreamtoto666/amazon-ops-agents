@@ -8,6 +8,8 @@ from langgraph.graph.message import add_messages
 
 class AmazonOpsState(TypedDict, total=False):
     messages: Annotated[list, add_messages]
+    conversation_history: list[dict[str, Any]]
+    current_user_message: str
     request_id: str
     owner_id: str
     user_context: dict[str, Any]
@@ -15,11 +17,13 @@ class AmazonOpsState(TypedDict, total=False):
     system_capabilities: dict[str, Any]
     current_time: str
     image_attachments: list[str]
+    team_knowledge: list[dict[str, Any]]
 
     understanding: dict[str, Any]
     intent: dict[str, Any]
     scope: dict[str, Any]
     route: str
+    answer_source: str
     risk_level: str
     missing_fields: list[str]
     clarification_question: str | None
@@ -33,5 +37,10 @@ class AmazonOpsState(TypedDict, total=False):
     data_artifacts: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[dict[str, Any]], operator.add]
     audit_events: Annotated[list[dict[str, Any]], operator.add]
+    competitor_data_modules: dict[str, Any]
+    competitor_processing_errors: Annotated[list[dict[str, Any]], operator.add]
+    competitor_report_sections: list[dict[str, Any]]
+    competitor_report: dict[str, Any]
 
     final_response: dict[str, Any]
+    resume_next: str

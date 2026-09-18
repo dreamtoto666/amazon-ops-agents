@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import {
   type ConversationMessage,
@@ -39,10 +40,16 @@ import {
 import { useRunStream } from '@/features/agent-runs/hooks/use-run-stream';
 import { createUuid } from '@/lib/uuid';
 import { AdvertisingReportImport } from './advertising-report-import';
+import { TeamKnowledgeUpload } from './team-knowledge-upload';
 import { MarkdownContent } from './markdown-content';
 
 const CONVERSATION_STORAGE_KEY = 'amazon-ops-conversation-id';
-type ModelName = 'deepseek-v4-flash' | 'deepseek-v4-pro' | 'deepseek-v4-flash-vision-exp';
+type ModelName =
+  | 'deepseek-v4-flash'
+  | 'deepseek-v4-flash-vision-exp'
+  | 'gpt-5.6-luna'
+  | 'gpt-5.6-terra'
+  | 'gpt-5.6-sol';
 type ReasoningEffort = 'off' | 'low' | 'high' | 'max';
 
 interface ImageAttachment {
@@ -86,22 +93,78 @@ interface FinalResponseData {
 type RunStream = ReturnType<typeof useRunStream>;
 
 function ExecutionTimeline({ events }: { events: RunStream['events'] }) {
+  const visibleKinds = new Set([
+    'unit.started',
+    'unit.completed',
+    'unit.degraded',
+    'unit.unavailable',
+    'unit.failed',
+    'tool.call.started',
+    'tool.call.completed',
+    'tool.call.failed',
+    'report.section.started',
+    'report.section.completed',
+    'report.section.failed',
+    'report.retrying'
+  ]);
   const auditEvents = events.filter(
     (event) =>
-      event.event === 'stage.progress' &&
-      ['tool.call.started', 'tool.call.completed', 'tool.call.failed'].includes(
-        String(event.data.kind)
-      )
+      event.event === 'stage.progress' && visibleKinds.has(String(event.data.kind))
   );
   if (auditEvents.length === 0) return null;
 
   return (
-    <details className='rounded-lg border bg-muted/20 p-3 text-sm' open>
+    <details className='rounded-lg border bg-muted/20 p-3 text-sm'>
       <summary className='cursor-pointer font-medium'>执行过程</summary>
       <ol className='mt-3 space-y-3 border-l pl-3'>
         {auditEvents.map((event) => {
           const kind = String(event.data.kind);
           const tool = typeof event.data.tool === 'string' ? event.data.tool : '';
+          const unitId = typeof event.data.unit_id === 'string' ? event.data.unit_id : 'Agent';
+          const sectionIndex =
+            typeof event.data.section_index === 'number' ? event.data.section_index : undefined;
+          if (kind === 'unit.started') {
+            return <li key={event.event_id}>{unitId} 开始执行</li>;
+          }
+          if (kind === 'unit.completed') {
+            return <li key={event.event_id}>{unitId} 已完成</li>;
+          }
+          if (kind === 'unit.unavailable' || kind === 'unit.failed') {
+            return (
+              <li key={event.event_id} className='text-destructive'>
+                {unitId} {kind === 'unit.unavailable' ? '不可用' : '执行失败'}
+              </li>
+            );
+          }
+          if (kind === 'unit.degraded') {
+            const summary = typeof event.data.summary === 'string' ? event.data.summary : undefined;
+            return (
+              <li key={event.event_id} className='text-amber-700 dark:text-amber-400'>
+                <p>{unitId} 部分完成</p>
+                {summary ? <p className='mt-1 text-xs'>{summary}</p> : null}
+              </li>
+            );
+          }
+          if (kind === 'report.section.started') {
+            return <li key={event.event_id}>正在生成第 {sectionIndex} 章</li>;
+          }
+          if (kind === 'report.section.completed') {
+            return <li key={event.event_id}>第 {sectionIndex} 章已完成</li>;
+          }
+          if (kind === 'report.section.failed') {
+            return (
+              <li key={event.event_id} className='text-destructive'>
+                第 {sectionIndex} 章本次生成失败
+              </li>
+            );
+          }
+          if (kind === 'report.retrying') {
+            return (
+              <li key={event.event_id} className='text-amber-700 dark:text-amber-400'>
+                第 {sectionIndex} 章正在进行第 {String(event.data.attempt)} 次尝试
+              </li>
+            );
+          }
           if (kind === 'tool.call.started') {
             return <li key={event.event_id}>正在调用只读工具：{tool}</li>;
           }
@@ -136,6 +199,7 @@ const REASONING_TITLES: Record<string, string> = {
   understanding: '理解问题',
   planning: '制定计划',
   analysis: '分析数据',
+  data_processing: '处理数据',
   verification: '验证原因',
   synthesis: '整理结论',
   advertising: '广告专家',
@@ -166,9 +230,7 @@ function ThinkingBlocks({ reasonings }: { reasonings: Record<string, string> }) 
             思考过程
             {REASONING_TITLES[key] ? ' · ' + REASONING_TITLES[key] : ''}
           </summary>
-          <p className='mt-2 leading-relaxed whitespace-pre-wrap text-muted-foreground'>
-            {text}
-          </p>
+          <p className='mt-2 leading-relaxed whitespace-pre-wrap text-muted-foreground'>{text}</p>
         </details>
       ))}
     </div>
@@ -184,68 +246,47 @@ function ResultContent({ result }: { result?: FinalResponseData }) {
       <MarkdownContent content={result.answer} />
       {result.confirmed_findings && result.confirmed_findings.length > 0 && (
         <div>
-          <p className='mb-1 text-xs font-semibold text-muted-foreground'>
-            已确认发现
-          </p>
+          <p className='mb-1 text-xs font-semibold text-muted-foreground'>已确认发现</p>
           <ul className='space-y-1 text-sm'>
             {result.confirmed_findings.map((item, index) => (
-              <li key={`${item.finding ?? 'finding'}-${index}`}>
-                • {item.finding}
-              </li>
+              <li key={`${item.finding ?? 'finding'}-${index}`}>• {item.finding}</li>
             ))}
           </ul>
         </div>
       )}
       {result.open_hypotheses && result.open_hypotheses.length > 0 && (
         <div>
-          <p className='mb-1 text-xs font-semibold text-muted-foreground'>
-            待验证假设
-          </p>
+          <p className='mb-1 text-xs font-semibold text-muted-foreground'>待验证假设</p>
           <ul className='space-y-1 text-sm'>
             {result.open_hypotheses.map((item, index) => (
-              <li key={`${item.description ?? 'hypothesis'}-${index}`}>
-                • {item.description}
-              </li>
+              <li key={`${item.description ?? 'hypothesis'}-${index}`}>• {item.description}</li>
             ))}
           </ul>
         </div>
       )}
       {result.recommended_actions && result.recommended_actions.length > 0 && (
         <div>
-          <p className='mb-1 text-xs font-semibold text-muted-foreground'>
-            建议动作
-          </p>
+          <p className='mb-1 text-xs font-semibold text-muted-foreground'>建议动作</p>
           <ul className='space-y-1 text-sm'>
             {result.recommended_actions.map((item, index) => (
-              <li key={`${item.action ?? 'action'}-${index}`}>
-                • {item.action}
-              </li>
+              <li key={`${item.action ?? 'action'}-${index}`}>• {item.action}</li>
             ))}
           </ul>
         </div>
       )}
       {result.deliverables?.map((deliverable, index) =>
         deliverable.type === 'listing_draft' && deliverable.draft ? (
-          <div
-            key={`listing-${index}`}
-            className='space-y-3 rounded-xl border bg-muted/20 p-4'
-          >
+          <div key={`listing-${index}`} className='space-y-3 rounded-xl border bg-muted/20 p-4'>
             <div>
-              <p className='text-xs font-semibold text-muted-foreground'>
-                主标题
-              </p>
+              <p className='text-xs font-semibold text-muted-foreground'>主标题</p>
               <p className='mt-1'>{deliverable.draft.title}</p>
             </div>
             <div>
-              <p className='text-xs font-semibold text-muted-foreground'>
-                副标题
-              </p>
+              <p className='text-xs font-semibold text-muted-foreground'>副标题</p>
               <p className='mt-1'>{deliverable.draft.subtitle}</p>
             </div>
             <div>
-              <p className='text-xs font-semibold text-muted-foreground'>
-                五点描述
-              </p>
+              <p className='text-xs font-semibold text-muted-foreground'>五点描述</p>
               <ul className='mt-1 space-y-1 text-sm'>
                 {deliverable.draft.bullet_points?.map((bullet, bulletIndex) => (
                   <li key={`${bullet}-${bulletIndex}`}>• {bullet}</li>
@@ -253,17 +294,11 @@ function ResultContent({ result }: { result?: FinalResponseData }) {
               </ul>
             </div>
             <div>
-              <p className='text-xs font-semibold text-muted-foreground'>
-                商品描述
-              </p>
-              <p className='mt-1 whitespace-pre-wrap text-sm'>
-                {deliverable.draft.description}
-              </p>
+              <p className='text-xs font-semibold text-muted-foreground'>商品描述</p>
+              <p className='mt-1 whitespace-pre-wrap text-sm'>{deliverable.draft.description}</p>
             </div>
             <div>
-              <p className='text-xs font-semibold text-muted-foreground'>
-                Search Terms
-              </p>
+              <p className='text-xs font-semibold text-muted-foreground'>Search Terms</p>
               <p className='mt-1 text-sm'>{deliverable.draft.search_terms}</p>
             </div>
           </div>
@@ -275,16 +310,24 @@ function ResultContent({ result }: { result?: FinalResponseData }) {
 
 function AnalysisRun({ run }: { run: RunStream }) {
   const { connection } = run;
-  const completedEvent = run.events
-    .toReversed()
-    .find((event) => event.event === 'run.completed');
-  const failedEvent = run.events
-    .toReversed()
-    .find((event) => event.event === 'run.failed');
-  const waitingEvent = run.events
-    .toReversed()
-    .find((event) => event.event === 'stage.waiting');
+  const completedEvent = run.events.toReversed().find((event) => event.event === 'run.completed');
+  const failedEvent = run.events.toReversed().find((event) => event.event === 'run.failed');
+  const waitingEvent = run.events.toReversed().find((event) => event.event === 'stage.waiting');
   const result = completedEvent?.data.result as FinalResponseData | undefined;
+  const isReportRun =
+    run.events.some(
+      (event) =>
+        event.event === 'stage.progress' && String(event.data.kind).startsWith('report.')
+    ) || result?.deliverables?.some((item) => item.type === 'competitor_advertising_report');
+  const streamedReport = run.events
+    .filter(
+      (event) =>
+        event.event === 'stage.progress' &&
+        event.data.kind === 'report.section.delta' &&
+        typeof event.data.text === 'string'
+    )
+    .map((event) => event.data.text as string)
+    .join('');
   const streamedAnswer = run.events
     .filter(
       (event) =>
@@ -295,9 +338,7 @@ function AnalysisRun({ run }: { run: RunStream }) {
     .map((event) => event.data.text as string)
     .join('');
   const failure =
-    (typeof failedEvent?.data.error === 'string'
-      ? failedEvent.data.error
-      : undefined) ?? run.error;
+    (typeof failedEvent?.data.error === 'string' ? failedEvent.data.error : undefined) ?? run.error;
   const waitingMessage =
     typeof waitingEvent?.data.question === 'string'
       ? waitingEvent.data.question
@@ -311,7 +352,7 @@ function AnalysisRun({ run }: { run: RunStream }) {
         <Icons.sparkles className='size-4' />
       </MessageAvatar>
       <MessageContent>
-        <MessageHeader>Amazon Ops 总控</MessageHeader>
+        <MessageHeader>{isReportRun ? '竞品报告 Agent' : 'Amazon Ops 总控'}</MessageHeader>
         <Bubble variant='outline' className='max-w-[92%]'>
           <BubbleContent className='w-full min-w-[280px] space-y-3'>
             <ThinkingBlocks reasonings={run.reasonings} />
@@ -337,9 +378,13 @@ function AnalysisRun({ run }: { run: RunStream }) {
                   正在执行任务…
                 </div>
                 <ExecutionTimeline events={run.events} />
-                {streamedAnswer && (
+                {(isReportRun ? streamedReport : streamedAnswer) && (
                   <div className='rounded-lg border bg-background p-3 leading-relaxed whitespace-pre-wrap'>
-                    {streamedAnswer}
+                    {isReportRun ? (
+                      <MarkdownContent content={streamedReport} />
+                    ) : (
+                      streamedAnswer
+                    )}
                     <span className='ml-1 inline-block size-2 animate-pulse rounded-full bg-primary' />
                   </div>
                 )}
@@ -365,6 +410,7 @@ export function OperationsChat() {
   const [input, setInput] = useState('');
   const [model, setModel] = useState<ModelName>('deepseek-v4-flash');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off');
+  const [useTeamKnowledge, setUseTeamKnowledge] = useState(true);
   const [question, setQuestion] = useState<string>();
   const [questionImages, setQuestionImages] = useState<ImageAttachment[]>([]);
   const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>([]);
@@ -374,19 +420,27 @@ export function OperationsChat() {
   const [conversationId, setConversationId] = useState<string>();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [history, setHistory] = useState<ConversationMessage[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyConversationId, setHistoryConversationId] = useState<string>();
   const [historyError, setHistoryError] = useState<string>();
   const [deletingConversationId, setDeletingConversationId] = useState<string>();
   const isComposingRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
   const run = useRunStream(runId ?? 'idle', Boolean(runId));
 
+  // A run owns the conversation until it settles. ``error`` is the one terminal
+  // state that never hands the turn back — the sync effect below only folds
+  // ``completed``/``waiting`` into history — so sending again has to be allowed
+  // there, or a failed run would block the composer forever. Every other state
+  // means the answer is still only visible in the transient stream, and sending
+  // now would unmount it before it reaches the conversation.
+  const isRunInFlight = Boolean(runId) && run.connection !== 'error';
+
   const refreshConversations = useCallback(async () => {
     try {
       setConversations(await listConversations());
     } catch (error) {
-      setHistoryError(
-        error instanceof Error ? error.message : '无法读取会话记录。'
-      );
+      setHistoryError(error instanceof Error ? error.message : '无法读取会话记录。');
     }
   }, []);
 
@@ -414,22 +468,99 @@ export function OperationsChat() {
     if (!conversationId) return;
     let cancelled = false;
     setHistory([]);
+    setHistoryConversationId(undefined);
     setHistoryError(undefined);
+    setHistoryLoading(true);
     void getConversationMessages(conversationId)
       .then((messages) => {
-        if (!cancelled) setHistory(messages);
+        if (!cancelled) {
+          setHistory(messages);
+          setHistoryConversationId(conversationId);
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          setHistoryError(
-            error instanceof Error ? error.message : '无法读取当前对话。'
-          );
+          setHistoryError(error instanceof Error ? error.message : '无法读取当前对话。');
         }
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || historyLoading || historyConversationId !== conversationId) {
+      return;
+    }
+    const el = messagesRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [conversationId, history, historyConversationId, historyLoading]);
+
+  useEffect(() => {
+    if (
+      !conversationId ||
+      !runId ||
+      (run.connection !== 'completed' && run.connection !== 'waiting')
+    ) {
+      return;
+    }
+
+    const targetConversationId = conversationId;
+    const terminalRunId = runId;
+    const completedEvent = run.events.toReversed().find((event) => event.event === 'run.completed');
+    const waitingEvent = run.events.toReversed().find((event) => event.event === 'stage.waiting');
+    const result = completedEvent?.data.result as FinalResponseData | undefined;
+    const expectedAssistantMessage =
+      result?.answer ??
+      (typeof waitingEvent?.data.question === 'string' ? waitingEvent.data.question : undefined);
+    let cancelled = false;
+
+    async function syncCompletedTurn() {
+      let messages: ConversationMessage[] = [];
+
+      // The terminal SSE event is emitted just before the run manager persists
+      // the assistant message. Retry briefly so the UI swaps the transient run
+      // for the durable conversation only after that final message is visible.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        messages = await getConversationMessages(targetConversationId);
+        const assistantMessageIsStored =
+          !expectedAssistantMessage ||
+          messages.some(
+            (message) =>
+              message.kind === 'message' &&
+              message.role === 'assistant' &&
+              message.content === expectedAssistantMessage
+          );
+        if (assistantMessageIsStored) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 100 * (attempt + 1)));
+      }
+
+      if (cancelled) return;
+      setHistory(messages);
+      setHistoryConversationId(targetConversationId);
+      setHistoryError(undefined);
+      setRunId((current) => (current === terminalRunId ? undefined : current));
+      setQuestion(undefined);
+      setQuestionImages((current) => {
+        current.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
+        return [];
+      });
+      await refreshConversations();
+    }
+
+    void syncCompletedTurn().catch((error: unknown) => {
+      if (!cancelled) {
+        setHistoryError(error instanceof Error ? error.message : '无法刷新当前对话。');
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, refreshConversations, run.connection, run.events, runId]);
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.items)
@@ -470,7 +601,14 @@ export function OperationsChat() {
   async function submitQuestion(event?: FormEvent) {
     event?.preventDefault();
     const value = input.trim();
-    if ((!value && imageAttachments.length === 0) || submitting || !conversationId) return;
+    if (
+      (!value && imageAttachments.length === 0) ||
+      submitting ||
+      isRunInFlight ||
+      !conversationId
+    ) {
+      return;
+    }
     const message = value || '请分析这张图片。';
     const attachments = imageAttachments;
     setQuestion(message);
@@ -490,18 +628,22 @@ export function OperationsChat() {
         model,
         reasoningEffort,
         undefined,
-        imageDataUrls
+        imageDataUrls,
+        useTeamKnowledge
       );
-      window.localStorage.setItem(
-        CONVERSATION_STORAGE_KEY,
-        created.conversation_id
-      );
+      window.localStorage.setItem(CONVERSATION_STORAGE_KEY, created.conversation_id);
       setRunId(created.run_id);
       void refreshConversations();
     } catch (error) {
-      setSubmitError(
-        error instanceof Error ? error.message : '无法创建 Agent 任务。'
-      );
+      setSubmitError(error instanceof Error ? error.message : '无法创建 Agent 任务。');
+      // The turn was never accepted, so it must not keep looking sent: drop the
+      // optimistic bubble and hand the text and images back to the composer.
+      // Their object URLs are deliberately not revoked — the same attachments
+      // are being put back in use, and revoking would break the previews.
+      setQuestion(undefined);
+      setQuestionImages([]);
+      setInput((current) => current || message);
+      setImageAttachments((current) => (current.length > 0 ? current : attachments));
     } finally {
       setSubmitting(false);
     }
@@ -518,11 +660,17 @@ export function OperationsChat() {
     setQuestionImages([]);
     setSubmitError(undefined);
     setHistory([]);
+    setHistoryConversationId(undefined);
     setHistoryError(undefined);
+    setHistoryLoading(false);
   }
 
   function selectConversation(nextConversationId: string) {
     window.localStorage.setItem(CONVERSATION_STORAGE_KEY, nextConversationId);
+    setHistory([]);
+    setHistoryConversationId(undefined);
+    setHistoryError(undefined);
+    setHistoryLoading(true);
     setConversationId(nextConversationId);
     setQuestion(undefined);
     setRunId(undefined);
@@ -533,11 +681,7 @@ export function OperationsChat() {
   }
 
   async function removeConversation(targetConversationId: string) {
-    if (
-      targetConversationId === conversationId &&
-      Boolean(runId) &&
-      (run.connection === 'connecting' || run.connection === 'live')
-    ) {
+    if (targetConversationId === conversationId && isRunInFlight) {
       setSubmitError('当前任务仍在运行，请等待任务结束后再删除此对话。');
       return;
     }
@@ -553,9 +697,7 @@ export function OperationsChat() {
       }
       await refreshConversations();
     } catch (error) {
-      setSubmitError(
-        error instanceof Error ? error.message : '无法删除此对话。'
-      );
+      setSubmitError(error instanceof Error ? error.message : '无法删除此对话。');
     } finally {
       setDeletingConversationId(undefined);
     }
@@ -563,9 +705,7 @@ export function OperationsChat() {
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     const isImeComposing =
-      event.nativeEvent.isComposing ||
-      event.keyCode === 229 ||
-      isComposingRef.current;
+      event.nativeEvent.isComposing || event.keyCode === 229 || isComposingRef.current;
 
     if (isImeComposing) {
       return;
@@ -582,21 +722,12 @@ export function OperationsChat() {
       <aside className='hidden min-h-0 border-r bg-muted/20 lg:flex lg:flex-col'>
         <div className='flex items-center justify-between p-4'>
           <p className='text-sm font-semibold'>对话记录</p>
-          <Button
-            size='icon-sm'
-            variant='ghost'
-            aria-label='新建对话'
-            onClick={resetChat}
-          >
+          <Button size='icon-sm' variant='ghost' aria-label='新建对话' onClick={resetChat}>
             <Icons.add />
           </Button>
         </div>
         <div className='px-3 pb-2'>
-          <Button
-            className='w-full justify-start'
-            variant='outline'
-            onClick={resetChat}
-          >
+          <Button className='w-full justify-start' variant='outline' onClick={resetChat}>
             <Icons.edit /> 新建对话
           </Button>
         </div>
@@ -605,35 +736,25 @@ export function OperationsChat() {
             <div className='space-y-1'>
               {conversations.map((conversation) => {
                 const isCurrent = conversation.conversation_id === conversationId;
-                const isRunning =
-                  isCurrent &&
-                  Boolean(runId) &&
-                  (run.connection === 'connecting' || run.connection === 'live');
+                const isRunning = isCurrent && isRunInFlight;
                 return (
-                  <div
-                    key={conversation.conversation_id}
-                    className='group flex items-center gap-1'
-                  >
+                  <div key={conversation.conversation_id} className='group flex items-center gap-1'>
                     <Button
                       variant={isCurrent ? 'secondary' : 'ghost'}
                       className='h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left'
-                      onClick={() =>
-                        selectConversation(conversation.conversation_id)
-                      }
+                      onClick={() => selectConversation(conversation.conversation_id)}
                     >
-                      <span className='line-clamp-2 text-sm'>
-                        {conversation.preview}
-                      </span>
+                      <span className='line-clamp-2 text-sm'>{conversation.preview}</span>
                     </Button>
                     <Button
                       size='icon-xs'
                       variant='ghost'
                       aria-label='删除对话'
                       title={isRunning ? '任务运行中，暂不可删除' : '删除对话'}
-                      disabled={isRunning || deletingConversationId === conversation.conversation_id}
-                      onClick={() =>
-                        void removeConversation(conversation.conversation_id)
+                      disabled={
+                        isRunning || deletingConversationId === conversation.conversation_id
                       }
+                      onClick={() => void removeConversation(conversation.conversation_id)}
                     >
                       {deletingConversationId === conversation.conversation_id ? (
                         <Icons.spinner className='animate-spin' />
@@ -653,12 +774,16 @@ export function OperationsChat() {
         </div>
         <div className='border-t p-3'>
           <AdvertisingReportImport />
+          <TeamKnowledgeUpload />
         </div>
       </aside>
 
       <section className='flex min-h-0 flex-col bg-background'>
         <div ref={messagesRef} className='min-h-0 flex-1 overflow-y-auto'>
-          <div className='mx-auto flex min-h-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6'>
+          <div
+            key={conversationId}
+            className='mx-auto flex min-h-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6'
+          >
             <Message>
               <MessageAvatar className='size-8 bg-primary text-primary-foreground'>
                 <Icons.sparkles className='size-4' />
@@ -679,43 +804,51 @@ export function OperationsChat() {
               </div>
             )}
 
-            {history.map((message, index) =>
-              message.kind === 'summary' ? (
-                <div
-                  key={`summary-${index}`}
-                  className='rounded-lg border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground'
-                >
-                  <p className='mb-1 font-medium text-foreground'>已压缩的历史对话</p>
-                  <MarkdownContent content={message.content} />
-                </div>
-              ) : message.role === 'user' ? (
-                <Message key={`${message.role}-${index}`} align='end'>
-                  <MessageAvatar className='size-8 bg-secondary'>
-                    <Icons.user className='size-4' />
-                  </MessageAvatar>
-                  <MessageContent>
-                    <MessageHeader>你</MessageHeader>
-                    <Bubble>
-                      <BubbleContent>{message.content}</BubbleContent>
-                    </Bubble>
-                  </MessageContent>
-                </Message>
-              ) : (
-                <Message key={`${message.role}-${index}`}>
-                  <MessageAvatar className='size-8 bg-primary text-primary-foreground'>
-                    <Icons.sparkles className='size-4' />
-                  </MessageAvatar>
-                  <MessageContent>
-                    <MessageHeader>Amazon Ops 总控</MessageHeader>
-                    <Bubble variant='outline' className='max-w-[92%]'>
-                      <BubbleContent>
-                        <MarkdownContent content={message.content} />
-                      </BubbleContent>
-                    </Bubble>
-                  </MessageContent>
-                </Message>
-              )
-            )}
+            {historyLoading && <p className='text-sm text-muted-foreground'>加载中…</p>}
+
+            {!historyLoading &&
+              historyConversationId === conversationId &&
+              history.map((message, index) =>
+                message.kind === 'summary' ? (
+                  <div
+                    key={`${conversationId}-summary-${index}`}
+                    className='rounded-lg border border-dashed bg-muted/30 p-3 text-sm text-muted-foreground'
+                  >
+                    <p className='mb-1 font-medium text-foreground'>已压缩的历史对话</p>
+                    <MarkdownContent content={message.content} />
+                  </div>
+                ) : message.role === 'user' ? (
+                  <Message key={`${conversationId}-${message.role}-${index}`} align='end'>
+                    <MessageAvatar className='size-8 bg-secondary'>
+                      <Icons.user className='size-4' />
+                    </MessageAvatar>
+                    <MessageContent>
+                      <MessageHeader>你</MessageHeader>
+                      <Bubble>
+                        <BubbleContent>{message.content}</BubbleContent>
+                      </Bubble>
+                    </MessageContent>
+                  </Message>
+                ) : (
+                  <Message key={`${conversationId}-${message.role}-${index}`}>
+                    <MessageAvatar className='size-8 bg-primary text-primary-foreground'>
+                      <Icons.sparkles className='size-4' />
+                    </MessageAvatar>
+                    <MessageContent>
+                      <MessageHeader>
+                        {message.content.startsWith('# 美国站竞品广告对标报告')
+                          ? '竞品报告 Agent'
+                          : 'Amazon Ops 总控'}
+                      </MessageHeader>
+                      <Bubble variant='outline' className='max-w-[92%]'>
+                        <BubbleContent>
+                          <MarkdownContent content={message.content} />
+                        </BubbleContent>
+                      </Bubble>
+                    </MessageContent>
+                  </Message>
+                )
+              )}
 
             {question && (
               <Message align='end'>
@@ -746,9 +879,7 @@ export function OperationsChat() {
             )}
 
             {submitting && (
-              <p className='pl-10 text-sm text-muted-foreground'>
-                正在向后端创建真实任务…
-              </p>
+              <p className='pl-10 text-sm text-muted-foreground'>正在向后端创建真实任务…</p>
             )}
             {submitError && (
               <div className='ml-10 flex max-w-2xl gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive'>
@@ -760,10 +891,7 @@ export function OperationsChat() {
           </div>
         </div>
 
-        <form
-          onSubmit={submitQuestion}
-          className='border-t bg-background p-3 sm:p-4'
-        >
+        <form onSubmit={submitQuestion} className='border-t bg-background p-3 sm:p-4'>
           <div className='mx-auto max-w-4xl rounded-xl border bg-card p-2 shadow-sm focus-within:ring-2 focus-within:ring-ring/30'>
             {imageAttachments.length > 0 && (
               <div className='flex flex-wrap gap-2 px-2 pt-2'>
@@ -804,7 +932,7 @@ export function OperationsChat() {
               className='max-h-32 min-h-14 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0'
             />
             <div className='flex items-center justify-between gap-2 px-1 pt-1'>
-              <div className='flex items-center gap-4'>
+              <div className='flex flex-wrap items-center gap-4'>
                 <div className='flex items-center gap-2'>
                   <span className='text-sm text-muted-foreground'>模型</span>
                   <Select
@@ -817,8 +945,10 @@ export function OperationsChat() {
                     </SelectTrigger>
                     <SelectContent align='start'>
                       <SelectItem value='deepseek-v4-flash'>Flash（更快）</SelectItem>
-                      <SelectItem value='deepseek-v4-pro'>Pro（更强）</SelectItem>
                       <SelectItem value='deepseek-v4-flash-vision-exp'>Vision（看图）</SelectItem>
+                      <SelectItem value='gpt-5.6-luna'>GPT-5.6 Luna</SelectItem>
+                      <SelectItem value='gpt-5.6-terra'>GPT-5.6 Terra</SelectItem>
+                      <SelectItem value='gpt-5.6-sol'>GPT-5.6 Sol</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -840,6 +970,16 @@ export function OperationsChat() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div className='flex items-center gap-2'>
+                  <span className='text-sm text-muted-foreground'>知识库</span>
+                  <Switch
+                    checked={useTeamKnowledge}
+                    onCheckedChange={setUseTeamKnowledge}
+                    disabled={submitting}
+                    size='sm'
+                    aria-label='使用知识库'
+                  />
+                </div>
               </div>
               <Button
                 type='submit'
@@ -847,15 +987,13 @@ export function OperationsChat() {
                 disabled={
                   (!input.trim() && imageAttachments.length === 0) ||
                   submitting ||
+                  isRunInFlight ||
                   !conversationId
                 }
+                title={isRunInFlight ? '当前任务仍在运行，请等待结束后再发送' : undefined}
                 aria-label='发送问题'
               >
-                {submitting ? (
-                  <Icons.spinner className='animate-spin' />
-                ) : (
-                  <Icons.send />
-                )}
+                {submitting ? <Icons.spinner className='animate-spin' /> : <Icons.send />}
               </Button>
             </div>
           </div>

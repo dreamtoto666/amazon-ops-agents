@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from threading import RLock
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from threading import Event, RLock, Thread
 from typing import Any, Literal, Mapping
 from urllib.parse import quote
 from uuid import uuid4
@@ -50,6 +52,7 @@ from .advertising import (
     AdvertisingRunRecord,
     ImportedAdvertisingReportSpecialist,
 )
+from .competitor_advertising import CompetitorAdvertisingSpecialist
 from .models import SpecialistName
 from .advertising.history import InMemoryAdvertisingRunHistoryStore, PostgresAdvertisingRunHistoryStore
 from .advertising.imports import AdvertisingImportService, ImportDataSummary, ImportResult, InMemoryImportStore, PostgresImportStore, ReportType
@@ -59,6 +62,16 @@ from .customs_declaration import CustomsDeclarationService, CustomsPreview
 from .customs_declaration.service import CustomsGenerationError, MAX_FILE_SIZE
 from .european_customs_declaration import EuropeanCustomsDeclarationService, EuropeanCustomsPreview
 from .european_customs_declaration.service import EuropeanCustomsGenerationError
+from .team_knowledge import (
+    InMemoryKnowledgeStore,
+    KnowledgeStatus,
+    PostgresKnowledgeStore,
+    TeamKnowledgeError,
+    TeamKnowledgeService,
+    TeamKnowledgeUnavailable,
+)
+from .chat_runs import PostgresChatRunStore
+from .observability import shutdown_observability
 
 
 DEFAULT_DATABASE_URL = "postgresql://amazon_ops:amazon_ops@127.0.0.1:5432/amazon_ops"
@@ -115,6 +128,7 @@ class CreateRunRequest(BaseModel):
     shop_directory: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
     model: DeepSeekModelName | None = None
     reasoning_effort: DeepSeekReasoningEffort | None = None
+    use_team_knowledge: bool = True
     image_attachments: list[ImageAttachment] = Field(default_factory=list, max_length=4)
 
 
@@ -204,10 +218,14 @@ class AgentRunManager:
             max_workers=max_workers, thread_name_prefix="amazon-ops-run"
         )
         self._lock = RLock()
+        self._chat_recovery_stop = Event()
+        self._chat_recovery_thread: Thread | None = None
         self._runs: dict[str, RunRecord] = {}
         self._owners: dict[str, str | None] = {}
         self.advertising_imports: AdvertisingImportService | None = None
+        self.team_knowledge: TeamKnowledgeService | None = None
         self.nl2sql: Any | None = None
+        self.chat_runs: PostgresChatRunStore | None = None
         self.specialists: dict[str, Any] = self._specialists_for(self.roles)
         self.graph = self._graph_for(self.roles)
 
@@ -216,13 +234,19 @@ class AgentRunManager:
             SpecialistName.ADVERTISING.value: ImportedAdvertisingReportSpecialist(
                 lambda: self.nl2sql,
                 lambda: roles.advertising_react_model,
-            )
+            ),
+            SpecialistName.COMPETITOR_ADVERTISING.value: CompetitorAdvertisingSpecialist.production(
+                roles.competitor_research_router
+            ),
         }
 
     def _graph_for(self, roles: DeepSeekModelRoles) -> Any:
         return build_controller_graph(
             interpreter=roles.request_interpreter,
             specialists=self._specialists_for(roles),
+            competitor_data_processor=roles.competitor_data_processor,
+            competitor_report_writer=roles.competitor_report_writer,
+            report_checkpoint=self._checkpoint_report_progress,
             aggregator=DeterministicAggregator(),
             responder=roles.direct_responder,
             stages=self.stages,
@@ -257,6 +281,11 @@ class AgentRunManager:
             self._owners[run_id] = owner_id
         previous_messages = self.memory.history(owner_id, request.conversation_id)
         current_message = {"role": "user", "content": request.message}
+        knowledge_snippets = (
+            self.team_knowledge.search(request.message)
+            if request.use_team_knowledge and self.team_knowledge
+            else []
+        )
         self.memory.append(
             owner_id, request.conversation_id, role="user", content=request.message, turn_id=run_id
         )
@@ -264,8 +293,11 @@ class AgentRunManager:
             "request_id": run_id,
             "owner_id": owner_id,
             "messages": [*previous_messages, current_message],
+            "conversation_history": previous_messages,
+            "current_user_message": request.message,
             "user_context": request.user_context,
             "image_attachments": [item.data_url for item in request.image_attachments],
+            "team_knowledge": [item.model_dump() for item in knowledge_snippets],
             "shop_directory": request.shop_directory,
             "system_capabilities": {
                 "llm": {
@@ -290,6 +322,10 @@ class AgentRunManager:
                         "configured": self.nl2sql is not None,
                         "purpose": "团队共享已导入广告报表的只读查询",
                     },
+                    "team_knowledge": {
+                        "configured": bool(self.team_knowledge and self.team_knowledge.status().status == "active"),
+                        "purpose": "团队共享 Obsidian 知识库的补充业务资料",
+                    },
                 },
                 "agents": {
                     name: {"specialist_registered": True}
@@ -298,6 +334,8 @@ class AgentRunManager:
             },
             "current_time": datetime.now(timezone.utc).isoformat(),
         }
+        if self.chat_runs:
+            self.chat_runs.create(run_id, owner_id, request.conversation_id, state)
         self._executor.submit(self._execute, run_id, request.conversation_id, state, owner_id, graph, roles)
         return run_id
 
@@ -341,7 +379,7 @@ class AgentRunManager:
         roles: DeepSeekModelRoles,
     ) -> None:
         try:
-            result = graph.invoke(state)
+            result = self._run_graph_with_checkpoints(run_id, state, graph)
             final_response = result.get("final_response") or {}
             answer = final_response.get("answer")
             if isinstance(answer, str):
@@ -370,6 +408,8 @@ class AgentRunManager:
                 ),
                 result=final_response,
             )
+            if self.chat_runs:
+                self.chat_runs.finish(run_id, record.status, final_response)
         except Exception as exc:
             events = self.hub.events_after(run_id)
             terminal = any(StageEventType(item.event) in TERMINAL_EVENT_TYPES for item in events)
@@ -388,8 +428,88 @@ class AgentRunManager:
                     "message": self._safe_error_message(exc),
                 },
             )
+            if self.chat_runs:
+                self.chat_runs.finish(run_id, "failed", record.error)
         with self._lock:
             self._runs[run_id] = record
+
+    def _run_graph_with_checkpoints(self, run_id: str, state: dict[str, Any], graph: Any) -> dict[str, Any]:
+        """Run the controller graph and persist one resumable checkpoint per node.
+
+        ``AmazonOpsState`` owns the reducer semantics (``add_messages``,
+        ``operator.add``), so the accumulated state is read from the graph's
+        ``values`` stream instead of being rebuilt here.  The returned state is
+        therefore exactly what ``graph.invoke`` would have returned.
+
+        A checkpoint can only name the node to resume at once that node is known,
+        and the successor of a completed node is only revealed by the following
+        step.  Each checkpoint is written one step late, carrying the state after
+        its own node plus the successor observed afterwards.  Recovery therefore
+        replays at most the node that was still in flight, and never skips one.
+        """
+
+        current = dict(state)
+        pending_node: str | None = None
+        pending_state: dict[str, Any] | None = None
+        for mode, chunk in graph.stream(current, stream_mode=["updates", "values"]):
+            if mode == "updates":
+                if not isinstance(chunk, dict):
+                    continue
+                # The controller graph is a linear chain, so a step reports one node.
+                for node in chunk:
+                    if pending_node is not None and pending_state is not None:
+                        self._checkpoint(run_id, pending_node, pending_state, resume_next=str(node))
+                    pending_node, pending_state = str(node), None
+                    break
+                continue
+            if isinstance(chunk, dict):
+                current = chunk
+                if pending_node is not None and pending_state is None:
+                    pending_state = chunk
+        return current
+
+    def _checkpoint(self, run_id: str, node: str, state: dict[str, Any], *, resume_next: str) -> None:
+        if not self.chat_runs:
+            return
+        self.chat_runs.checkpoint(run_id, node, {**state, "resume_next": resume_next})
+
+    def _checkpoint_report_progress(
+        self, run_id: str, state: dict[str, Any]
+    ) -> None:
+        if not self.chat_runs:
+            return
+        self.chat_runs.checkpoint(
+            run_id,
+            "generate_competitor_report",
+            {**state, "resume_next": "generate_competitor_report"},
+        )
+
+    def recover_interrupted_chat_runs(self) -> list[str]:
+        """Resume stale chat runs from the successor recorded in their checkpoint."""
+
+        if not self.chat_runs:
+            return []
+        recovered: list[str] = []
+        for item in self.chat_runs.claim_stale(timedelta(minutes=30)):
+            state = dict(item["state"])
+            state["resume_next"] = str(state.get("resume_next") or "understand_request")
+            self._executor.submit(self._execute, item["run_id"], item["conversation_id"], state, item["owner_id"], self.graph, self.roles)
+            recovered.append(item["run_id"])
+        return recovered
+
+    def start_chat_recovery_monitor(self) -> None:
+        if not self.chat_runs or (self._chat_recovery_thread and self._chat_recovery_thread.is_alive()):
+            return
+        self.recover_interrupted_chat_runs()
+        self._chat_recovery_stop.clear()
+        def monitor() -> None:
+            while not self._chat_recovery_stop.wait(300):
+                self.recover_interrupted_chat_runs()
+        self._chat_recovery_thread = Thread(target=monitor, name="controller-chat-recovery", daemon=True)
+        self._chat_recovery_thread.start()
+
+    def stop_chat_recovery_monitor(self) -> None:
+        self._chat_recovery_stop.set()
 
     @staticmethod
     def _safe_error_message(exc: Exception) -> str:
@@ -415,6 +535,7 @@ def create_app(
     idempotency_registry: IdempotencyRegistry | None = None,
     auth_store: AuthStore | None = None,
     advertising_import_service: AdvertisingImportService | None = None,
+    team_knowledge_service: TeamKnowledgeService | None = None,
     customs_declaration_service: CustomsDeclarationService | None = None,
     european_customs_declaration_service: EuropeanCustomsDeclarationService | None = None,
 ) -> FastAPI:
@@ -462,11 +583,21 @@ def create_app(
     advertising_imports = advertising_import_service or AdvertisingImportService(
         InMemoryImportStore() if serverless_test_storage else PostgresImportStore(database_url)
     )
+    team_knowledge = team_knowledge_service or TeamKnowledgeService(
+        store=InMemoryKnowledgeStore() if serverless_test_storage else PostgresKnowledgeStore(database_url),
+        # Containers explicitly set /data/team-knowledge and mount a volume.  Local
+        # development has no writable /data mount, so keep an unconfigured Vault
+        # archive outside the repository instead.
+        archive_dir=Path(_env_text("TEAM_KNOWLEDGE_ARCHIVE_DIR", str(Path(tempfile.gettempdir()) / "amazon-ops-team-knowledge"))),
+    )
+    chat_runs = None if serverless_test_storage else PostgresChatRunStore(database_url)
     customs_declarations = customs_declaration_service or CustomsDeclarationService()
     european_customs_declarations = (
         european_customs_declaration_service or EuropeanCustomsDeclarationService()
     )
     runtime.advertising_imports = advertising_imports
+    runtime.team_knowledge = team_knowledge
+    runtime.chat_runs = chat_runs
     runtime.nl2sql = (
         NL2SQLMCPClient()
         if shared_llm and NL2SQLService.from_env(shared_llm) is not None
@@ -478,8 +609,19 @@ def create_app(
     app.state.idempotency_registry = idempotency
     app.state.auth_store = auth
     app.state.advertising_import_service = advertising_imports
+    app.state.team_knowledge_service = team_knowledge
+    app.state.chat_run_store = chat_runs
     app.state.customs_declaration_service = customs_declarations
     app.state.european_customs_declaration_service = european_customs_declarations
+    initialize_imports = getattr(advertising_imports.store, "initialize", None)
+    if callable(initialize_imports):
+        app.router.add_event_handler("startup", initialize_imports)
+    app.router.add_event_handler("startup", team_knowledge.initialize)
+    if chat_runs:
+        app.router.add_event_handler("startup", chat_runs.initialize)
+        recover_chat_runs = getattr(runtime, "start_chat_recovery_monitor", None)
+        if callable(recover_chat_runs):
+            app.router.add_event_handler("startup", recover_chat_runs)
     start_advertising_recovery = getattr(advertising_runtime, "start_recovery_monitor", None)
     if callable(start_advertising_recovery) and not serverless_test_storage:
         # Durable tasks retain their original identifiers; recovery only claims
@@ -499,6 +641,14 @@ def create_app(
         app.router.add_event_handler("shutdown", close_advertising)
     app.router.add_event_handler("shutdown", auth.close)
     app.router.add_event_handler("shutdown", advertising_imports.store.close)
+    app.router.add_event_handler("shutdown", team_knowledge.store.close)
+    if chat_runs:
+        stop_chat_recovery = getattr(runtime, "stop_chat_recovery_monitor", None)
+        if callable(stop_chat_recovery):
+            app.router.add_event_handler("shutdown", stop_chat_recovery)
+        app.router.add_event_handler("shutdown", chat_runs.close)
+    # Flush buffered Langfuse observations before the process exits.
+    app.router.add_event_handler("shutdown", shutdown_observability)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3001", "http://127.0.0.1:3001"],
@@ -808,6 +958,31 @@ def create_app(
     def advertising_import_template(report_type: ReportType, raw_request: Request) -> Response:
         require_user(raw_request)
         return Response(content=advertising_imports.template(report_type), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{report_type.value}-template.csv"'})
+
+    @app.get("/api/team-knowledge/vault", response_model=KnowledgeStatus)
+    def get_team_knowledge_vault(raw_request: Request) -> KnowledgeStatus:
+        require_user(raw_request)
+        return team_knowledge.status()
+
+    @app.post("/api/team-knowledge/vault", response_model=KnowledgeStatus)
+    async def upload_team_knowledge_vault(
+        raw_request: Request, file: UploadFile = File()
+    ) -> KnowledgeStatus:
+        user = require_admin(raw_request)
+        try:
+            return team_knowledge.upload(
+                uploaded_by=user.id,
+                file_name=file.filename or "",
+                content=await file.read(50 * 1024 * 1024 + 1),
+            )
+        except TeamKnowledgeUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
+        except TeamKnowledgeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
 
     @app.post("/api/ad-report-imports", response_model=ImportResult)
     async def import_advertising_report(raw_request: Request, report_type: ReportType | None = Form(default=None), file: UploadFile = File()) -> ImportResult:

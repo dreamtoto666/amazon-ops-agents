@@ -2,6 +2,7 @@ export const STAGE_NAMES = [
   'understanding',
   'planning',
   'analysis',
+  'data_processing',
   'verification',
   'synthesis',
   'waiting_input',
@@ -42,7 +43,7 @@ export interface StageView {
 
 export interface SpecialistView {
   id: string;
-  status: 'running' | 'completed' | 'waiting' | 'failed';
+  status: 'running' | 'completed' | 'degraded' | 'waiting' | 'unavailable' | 'failed';
   summary?: string;
   recordsReceived?: number;
 }

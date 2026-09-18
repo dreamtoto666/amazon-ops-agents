@@ -124,6 +124,23 @@ def test_agent_safe_campaign_scope_validates_without_store_or_asin():
     assert request.asins == []
 
 
+def test_history_title_identifies_shop_product_period_and_goal():
+    request = AdDiagnosticRequest.model_validate({
+        "campaign_ids": ["campaign-1"],
+        "current_period": {"start": "2026-08-01", "end": "2026-08-07"},
+        "goal": {"growth_priority": "profit"},
+    })
+    scope = ResolvedExecutionScope(
+        sid="private-store",
+        child_asins=("B0CHILD",),
+        parent_asins=("B0PARENT",),
+        campaign_ids=("campaign-1",),
+        shop_label="测试店铺",
+    )
+
+    assert AdvertisingRunManager._history_title(request, scope) == "测试店铺 · B0PARENT · 2026-08-01 至 2026-08-07"
+
+
 class FakeAdvertisingLLM:
     def __init__(self, *, bid_change_percent=-15):
         self.output_models = []

@@ -53,3 +53,28 @@ def test_listing_copy_request_routes_to_listing_content_agent():
     plan = build_initial_plan(intent, QueryScope(marketplaces=["US"]), "编写 Listing 文案")
 
     assert [task.agent for task in plan.tasks] == [SpecialistName.LISTING_CONTENT]
+
+
+def test_competitor_comparison_routes_to_competitor_advertising_specialist():
+    intent = UserIntent(domain=Domain.COMPETITOR, action=Action.COMPARE, confidence=0.98)
+
+    plan = build_initial_plan(intent, QueryScope(own_asin="B0OWN00001", competitor_asins=["B0COMP0001"]), "对比竞品广告信号")
+
+    assert [task.agent for task in plan.tasks] == [SpecialistName.COMPETITOR_ADVERTISING]
+
+
+def test_competitor_report_routes_to_competitor_and_own_advertising_data():
+    intent = UserIntent(domain=Domain.COMPETITOR, action=Action.COMPARE, confidence=0.98)
+
+    plan = build_initial_plan(
+        intent,
+        QueryScope(own_asin="B0OWN00001", competitor_asins=["B0COMP0001"]),
+        "生成竞品对比报告",
+        response_mode="competitor_report",
+    )
+
+    assert {task.agent for task in plan.tasks} == {
+        SpecialistName.COMPETITOR_ADVERTISING,
+        SpecialistName.ADVERTISING,
+    }
+    assert plan.execution_mode == "parallel"

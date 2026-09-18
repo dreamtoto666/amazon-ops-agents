@@ -130,7 +130,7 @@ class MCPProvider(str, Enum):
 SELLER_SPRITE_KEYWORD_TOOLS = frozenset(
     {"asin_detail", "traffic_source", "traffic_keyword", "keyword_order", "keyword_miner"}
 )
-SIF_KEYWORD_TOOLS = frozenset(
+SIF_COMPETITOR_RESEARCH_TOOLS = frozenset(
     {
         "market_get_asin_keyword_signals",
         "ops_get_listing_keyword_distribution",
@@ -139,8 +139,28 @@ SIF_KEYWORD_TOOLS = frozenset(
         "market_screen_keyword_opportunities",
         "market_discover_competitors",
         "market_get_keyword_root_competitors",
+        "ops_get_asin_sales_list",
+        "ops_get_asin_sales_trend",
+        "ops_get_listing_traffic_overview",
+        "ops_get_listing_traffic_structure",
+        "ops_get_asin_traffic_trend",
+        "ops_get_asin_traffic_trend_detail",
+        "ads_get_asin_ad_historical_feature_profile",
+        "ads_get_asin_ad_traffic_trend",
+        "ads_get_asin_campaign_changes",
+        "ads_get_asin_ad_structure",
+        "ads_get_asin_campaign_contribution_overview",
+        "ads_get_campaign_structure",
+        "ads_get_campaign_traffic_trend",
+        "ads_get_campaign_contribution_breakdown",
+        "ads_get_ad_group_traffic_trend",
+        "ads_get_ad_group_keyword_breakdown",
     }
 )
+# Kept as an alias for the existing Listing integration.  The shared Sif
+# connection remains fail-closed: only explicitly reviewed read tools appear
+# above, rather than every tool returned by Sif's dynamic directory.
+SIF_KEYWORD_TOOLS = SIF_COMPETITOR_RESEARCH_TOOLS
 # LingXing exposes business capabilities through a dynamic catalog.  These are
 # the only top-level MCP methods required to discover and invoke that catalog;
 # individual business tool IDs are separately allowlisted by their consumers.

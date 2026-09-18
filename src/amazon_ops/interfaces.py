@@ -4,13 +4,16 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from .events import get_stage_reporter
-from .llm import DeepSeekStructuredLLM, StructuredLLM
-from .models import AgentTask, FinalResponse, QueryScope, SpecialistResult, UnderstandRequestResult
+from .llm import MAX_COMPLETION_TOKENS, DeepSeekStructuredLLM, StructuredLLM
+from .models import AgentTask, CompetitorAdvertisingReport, CompetitorReportSection, FinalResponse, QueryScope, SpecialistResult, UnderstandRequestResult
 from .prompts import (
     DIRECT_RESPONDER_SYSTEM_PROMPT,
     REQUEST_INTERPRETER_SYSTEM_PROMPT,
     RESULT_AGGREGATOR_SYSTEM_PROMPT,
+    COMPETITOR_REPORT_SYSTEM_PROMPT,
     build_aggregation_context,
+    build_competitor_report_context,
+    build_competitor_report_section_context,
     build_direct_response_context,
     build_request_context,
 )
@@ -36,6 +39,14 @@ class ResultAggregator(Protocol):
 class DirectResponder(Protocol):
     def invoke(self, state: dict) -> FinalResponse:
         """Answer requests that do not require live operational data."""
+
+
+class CompetitorReportWriter(Protocol):
+    def invoke(self, state: dict) -> CompetitorAdvertisingReport:
+        """Write an evidence-bounded competitor report from completed specialist results."""
+
+    def invoke_section(self, state: dict, section_key: str) -> CompetitorReportSection:
+        """Write one evidence-bounded report section."""
 
 
 class DeepSeekRequestInterpreter:
@@ -80,6 +91,45 @@ class DeepSeekResultAggregator:
             context=build_aggregation_context(state),
             output_model=FinalResponse,
             max_tokens=5000,
+            **kwargs,
+        )
+
+
+class DeepSeekCompetitorReportWriter:
+    def __init__(self, llm: StructuredLLM) -> None:
+        self.llm = llm
+
+    def invoke(self, state: dict) -> CompetitorAdvertisingReport:
+        reporter = get_stage_reporter(state)
+        kwargs: dict[str, Any] = {}
+        if reporter is not None and isinstance(self.llm, DeepSeekStructuredLLM):
+            kwargs["thinking"] = True
+            kwargs["on_reasoning_delta"] = lambda text: reporter.emit("reasoning.delta", text=text)
+        return self.llm.complete(
+            system_prompt=COMPETITOR_REPORT_SYSTEM_PROMPT,
+            context=build_competitor_report_context(state),
+            output_model=CompetitorAdvertisingReport,
+            max_tokens=MAX_COMPLETION_TOKENS,
+            **kwargs,
+        )
+
+    def invoke_section(self, state: dict, section_key: str) -> CompetitorReportSection:
+        reporter = get_stage_reporter(state)
+        kwargs: dict[str, Any] = {}
+        if reporter is not None and isinstance(self.llm, DeepSeekStructuredLLM):
+            kwargs["thinking"] = True
+            kwargs["on_reasoning_delta"] = lambda text: reporter.emit(
+                "reasoning.delta", text=text, section_key=section_key
+            )
+        return self.llm.complete(
+            system_prompt=(
+                COMPETITOR_REPORT_SYSTEM_PROMPT
+                + f"\n\n本次只生成 section key={section_key} 的单个 CompetitorReportSection JSON。"
+                + " key 必须与指定值完全一致，不要生成标题、其他章节或报告级字段。"
+            ),
+            context=build_competitor_report_section_context(state, section_key),
+            output_model=CompetitorReportSection,
+            max_tokens=MAX_COMPLETION_TOKENS,
             **kwargs,
         )
 

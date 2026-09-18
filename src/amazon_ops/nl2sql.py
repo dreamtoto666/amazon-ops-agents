@@ -14,12 +14,13 @@ from psycopg_pool import ConnectionPool
 from .llm import StructuredLLM
 
 TABLE = "shared_imported_advertising_report_rows"
-COLUMNS = {"report_type", "profile_id", "report_date", "campaign_id", "ad_group_id", "keyword_id", "target_id", "search_term", "match_type", "impressions", "clicks", "spend", "sales", "orders", "ad_units"}
+COLUMNS = {"report_type", "profile_id", "report_date", "portfolio_name", "campaign_id", "ad_group_id", "keyword_id", "target_id", "search_term", "match_type", "impressions", "clicks", "spend", "sales", "orders", "ad_units"}
 TABLE_DESCRIPTION = "团队共享的标准化广告报表明细；它是只读广告分析的事实来源。"
 COLUMN_DESCRIPTIONS = {
     "report_type": "报表类型，用于区分 Campaign、关键词、搜索词等不同粒度。",
     "profile_id": "Amazon 广告店铺/授权 Profile ID；用于区分店铺，不是 ERP sid。",
     "report_date": "报表业务日期，用于日期范围筛选和周期比较。",
+    "portfolio_name": "广告组合（Portfolio）名称，位于广告活动上层；用户所说的“广告组合名称”对应此字段。",
     "campaign_id": "Amazon 广告活动 ID。",
     "ad_group_id": "广告组 ID；没有广告组维度时为空字符串。",
     "keyword_id": "关键词 ID；仅适用于关键词相关报表，否则为空字符串。",

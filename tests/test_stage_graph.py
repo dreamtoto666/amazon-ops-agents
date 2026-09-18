@@ -55,6 +55,26 @@ class FakeDirectResponder:
         return FinalResponse(answer="ACOS 是广告花费与广告销售额的比率。")
 
 
+class HistoryDirectResponder:
+    def invoke(self, state):
+        assert state["conversation_history"][-1]["content"] == "核心词 garage door seal 的差距最大。"
+        return FinalResponse(
+            answer="根据本次对话此前取得的数据，差距最大的是 garage door seal。"
+        )
+
+
+class ExplodingHistoryResponder:
+    def invoke(self, state):
+        raise RuntimeError("provider secret failure detail")
+
+
+class MustNotRunSpecialist:
+    name = SpecialistName.ADVERTISING.value
+
+    def invoke(self, task, scope, state):
+        raise AssertionError("history response must not call a specialist")
+
+
 class NeedsInputSpecialist:
     name = SpecialistName.LISTING_CONTENT.value
 
@@ -77,6 +97,19 @@ class FailedSpecialist:
             status="failed",
             summary="广告报表查询未成功完成，系统未读取任何广告数据，因此无法给出可靠结论。请稍后重试。",
             errors=[{"code": "AD_REPORT_QUERY_FAILED"}],
+        )
+
+
+class DegradedSpecialist:
+    name = SpecialistName.COMPETITOR_ADVERTISING.value
+
+    def invoke(self, task, scope, state):
+        return SpecialistResult(
+            task_id=task.task_id,
+            agent=SpecialistName.COMPETITOR_ADVERTISING,
+            status="degraded",
+            summary="竞品分析已降级完成，部分趋势数据不可用。",
+            errors=[{"code": "INVALID_REQUEST", "tool": "traffic_trend"}],
         )
 
 
@@ -183,6 +216,213 @@ def test_direct_deepseek_response_is_carried_by_terminal_sse_event():
     assert terminal.data["result"]["answer"].startswith("ACOS")
 
 
+def test_explicit_history_followup_forces_respond_and_skips_specialists():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.KEYWORD, action=Action.QUERY, confidence=0.98),
+        scope=QueryScope(asins=["B0OWN"]),
+        # Deliberately inconsistent to verify the graph's safety guard.
+        route=RequestRoute.EXECUTE,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="根据已给出的机会说明应调整哪些词",
+        answer_source="history",
+    )
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={SpecialistName.ADVERTISING.value: MustNotRunSpecialist()},
+        responder=HistoryDirectResponder(),
+        stages=StageController(hub),
+    )
+
+    result = graph.invoke(
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "针对给出的机会，我应该从哪些广告类型和词调整？",
+                }
+            ],
+            "conversation_history": [
+                {"role": "assistant", "content": "核心词 garage door seal 的差距最大。"}
+            ],
+            "current_user_message": "针对给出的机会，我应该从哪些广告类型和词调整？",
+            "request_id": "stage-history-1",
+        }
+    )
+    events = hub.events_after("stage-history-1")
+    intent_event = next(
+        event
+        for event in events
+        if event.event == StageEventType.STAGE_PROGRESS
+        and event.data.get("kind") == "intent.resolved"
+    )
+
+    assert result["route"] == RequestRoute.RESPOND.value
+    assert result["answer_source"] == "history"
+    assert result["final_response"]["answer"].startswith("根据本次对话")
+    assert intent_event.data["answer_source"] == "history"
+    assert not any(event.stage == StageName.PLANNING for event in events)
+    assert not any(
+        event.data.get("kind", "").startswith(("unit.", "tool."))
+        for event in events
+        if event.event == StageEventType.STAGE_PROGRESS
+    )
+    assert events[-1].event == StageEventType.RUN_COMPLETED
+
+
+def test_history_response_failure_is_sanitized_without_live_fallback():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.COMPETITOR, action=Action.EXPLAIN, confidence=0.95),
+        scope=QueryScope(),
+        route=RequestRoute.RESPOND,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="解释上面的报告",
+        answer_source="history",
+    )
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={SpecialistName.ADVERTISING.value: MustNotRunSpecialist()},
+        responder=ExplodingHistoryResponder(),
+        stages=StageController(hub),
+    )
+
+    result = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "解释上面的报告"}],
+            "conversation_history": [
+                {"role": "assistant", "content": "报告中有已确认的历史结论。"}
+            ],
+            "current_user_message": "解释上面的报告",
+            "request_id": "stage-history-failed",
+        }
+    )
+    events = hub.events_after("stage-history-failed")
+    answer = result["final_response"]["answer"]
+
+    assert "本轮未重新调用数据工具" in answer
+    assert "provider secret failure detail" not in str(events)
+    assert not any(event.stage == StageName.PLANNING for event in events)
+    assert events[-1].event == StageEventType.RUN_COMPLETED
+
+
+def test_old_understanding_payload_defaults_to_live_source():
+    understanding = UnderstandRequestResult.model_validate(
+        {
+            "intent": {"domain": "advertising", "action": "query", "confidence": 0.9},
+            "scope": {},
+            "route": "execute",
+            "risk_level": "read_only",
+            "normalized_request": "查询广告花费",
+        }
+    )
+
+    assert understanding.answer_source == "live"
+
+
+def test_history_source_without_explicit_reference_is_forced_to_live_execution():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.95),
+        scope=QueryScope(),
+        route=RequestRoute.RESPOND,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="这个产品销量多少",
+        answer_source="history",
+    )
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={SpecialistName.ADVERTISING.value: FakeSpecialist(SpecialistName.ADVERTISING)},
+        stages=StageController(hub),
+    )
+
+    result = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "这个产品销量多少？"}],
+            "conversation_history": [
+                {"role": "assistant", "content": "旧的销量数据"}
+            ],
+            "current_user_message": "这个产品销量多少？",
+            "request_id": "stage-history-not-explicit",
+        }
+    )
+
+    assert result["answer_source"] == "live"
+    assert result["route"] == RequestRoute.EXECUTE.value
+    assert any(
+        event.stage == StageName.PLANNING
+        for event in hub.events_after("stage-history-not-explicit")
+    )
+
+
+def test_refresh_marker_overrides_history_reuse():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.ADVERTISING, action=Action.QUERY, confidence=0.95),
+        scope=QueryScope(),
+        route=RequestRoute.RESPOND,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="重新查询最新销量",
+        answer_source="history",
+    )
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={SpecialistName.ADVERTISING.value: FakeSpecialist(SpecialistName.ADVERTISING)},
+        stages=StageController(hub),
+    )
+
+    result = graph.invoke(
+        {
+            "messages": [{"role": "user", "content": "重新查一下刚才的最新销量"}],
+            "conversation_history": [
+                {"role": "assistant", "content": "旧的销量数据"}
+            ],
+            "current_user_message": "重新查一下刚才的最新销量",
+            "request_id": "stage-history-refresh",
+        }
+    )
+
+    assert result["answer_source"] == "live"
+    assert result["route"] == RequestRoute.EXECUTE.value
+    assert any(
+        event.data.get("kind") == "unit.started"
+        for event in hub.events_after("stage-history-refresh")
+        if event.event == StageEventType.STAGE_PROGRESS
+    )
+
+
+def test_controller_graph_can_resume_after_understanding_without_calling_interpreter():
+    class MustNotRunInterpreter:
+        def invoke(self, state):
+            raise AssertionError("checkpoint recovery must not repeat understanding")
+
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=MustNotRunInterpreter(),
+        specialists={},
+        responder=FakeDirectResponder(),
+        stages=StageController(hub),
+    )
+    result = graph.invoke(
+        {
+            "messages": [],
+            "request_id": "stage-resume-1",
+            "resume_next": "direct_response",
+            "route": RequestRoute.RESPOND.value,
+            "understanding": UnderstandRequestResult(
+                intent=UserIntent(domain=Domain.ADVERTISING, action=Action.EXPLAIN, confidence=0.9),
+                scope=QueryScope(),
+                route=RequestRoute.RESPOND,
+                risk_level=RiskLevel.READ_ONLY,
+                normalized_request="解释 ACOS",
+            ).model_dump(mode="json"),
+        }
+    )
+
+    assert result["final_response"]["answer"].startswith("ACOS")
+    assert all(event.stage != StageName.UNDERSTANDING for event in hub.events_after("stage-resume-1"))
+
+
 def test_controller_waits_when_listing_agent_needs_product_information():
     understanding = UnderstandRequestResult(
         intent=UserIntent(domain=Domain.LISTING, action=Action.CREATE, confidence=0.98),
@@ -234,3 +474,33 @@ def test_controller_marks_the_run_failed_when_every_specialist_fails():
     assert result["final_response"]["answer"].startswith("广告报表查询未成功完成")
     assert terminal.event == StageEventType.RUN_FAILED
     assert terminal.data["error"] == result["final_response"]["answer"]
+
+
+def test_controller_emits_degraded_unit_without_failing_run():
+    understanding = UnderstandRequestResult(
+        intent=UserIntent(domain=Domain.COMPETITOR, action=Action.COMPARE, confidence=0.98),
+        scope=QueryScope(own_asin="B0OWN", competitor_asins=["B0COMPETITOR"]),
+        route=RequestRoute.EXECUTE,
+        risk_level=RiskLevel.READ_ONLY,
+        normalized_request="对比竞品",
+    )
+    hub = InMemoryEventHub()
+    graph = build_controller_graph(
+        interpreter=FakeInterpreter(understanding),
+        specialists={
+            SpecialistName.COMPETITOR_ADVERTISING.value: DegradedSpecialist()
+        },
+        stages=StageController(hub),
+    )
+
+    graph.invoke({"messages": [], "request_id": "stage-competitor-degraded"})
+    events = hub.events_after("stage-competitor-degraded")
+    unit_events = [
+        event.data.get("kind")
+        for event in events
+        if event.event == StageEventType.STAGE_PROGRESS
+        and str(event.data.get("kind", "")).startswith("unit.")
+    ]
+
+    assert unit_events == ["unit.started", "unit.degraded"]
+    assert events[-1].event == StageEventType.RUN_COMPLETED

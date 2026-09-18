@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Mapping
+from collections.abc import Callable
+from typing import Any, Mapping
 
 from langgraph.graph import END, START, StateGraph
 
 from .capabilities import build_capability_answer
+from .competitor_data_processor import CompetitorDataProcessor
+from .competitor_report import (
+    SECTION_TITLES,
+    competitor_report_title,
+    render_competitor_report,
+    render_competitor_report_section,
+    validate_competitor_report,
+    validate_competitor_report_section,
+)
 from .events import StageController, StageName, StageReporter
 from .interfaces import (
     DeterministicAggregator,
     DirectResponder,
+    CompetitorReportWriter,
     RequestInterpreter,
     ResultAggregator,
     SpecialistAgent,
@@ -17,6 +28,8 @@ from .interfaces import (
 from .models import (
     Action,
     AgentTask,
+    CompetitorAdvertisingReport,
+    CompetitorReportSection,
     Domain,
     FinalResponse,
     QueryScope,
@@ -28,15 +41,42 @@ from .models import (
     UserIntent,
 )
 from .routing import build_initial_plan, select_followup_tasks
+from .prompts import build_history_gate
 from .state import AmazonOpsState
+
+def _guard_answer_source(
+    result: UnderstandRequestResult, state: Mapping[str, Any]
+) -> UnderstandRequestResult:
+    """Enforce conservative history reuse even when model routing is inconsistent."""
+
+    gate = build_history_gate(state)
+
+    if gate["force_live"] or (
+        result.answer_source == "history"
+        and not gate["allowed"]
+    ):
+        updates: dict[str, Any] = {"answer_source": "live"}
+        if result.route == RequestRoute.RESPOND:
+            updates["route"] = (
+                RequestRoute.CLARIFY
+                if result.missing_fields
+                else RequestRoute.EXECUTE
+            )
+        return result.model_copy(update=updates)
+    if result.answer_source == "history" and result.route != RequestRoute.RESPOND:
+        return result.model_copy(update={"route": RequestRoute.RESPOND})
+    return result
 
 
 def build_controller_graph(
     *,
     interpreter: RequestInterpreter,
     specialists: Mapping[str, SpecialistAgent],
+    competitor_data_processor: CompetitorDataProcessor | None = None,
     aggregator: ResultAggregator | None = None,
     responder: DirectResponder | None = None,
+    competitor_report_writer: CompetitorReportWriter | None = None,
+    report_checkpoint: Callable[[str, dict[str, Any]], None] | None = None,
     stages: StageController | None = None,
 ):
     aggregator = aggregator or DeterministicAggregator()
@@ -78,13 +118,22 @@ def build_controller_graph(
                     "clarification_question": None,
                 }
             )
+        result = _guard_answer_source(result, state)
+
         # With attached images, route straight to the vision responder instead of
         # an operational specialist: the user wants the image analyzed, not a
         # live-data query. Only vision-capable models may carry images (enforced
         # in submit), so the responder reads the image from state and answers
         # directly about it.
         has_images = bool(state.get("image_attachments"))
-        final_route = RequestRoute.RESPOND.value if has_images else result.route.value
+        if has_images:
+            result = result.model_copy(
+                update={
+                    "route": RequestRoute.RESPOND,
+                    "answer_source": "general",
+                }
+            )
+        final_route = result.route.value
         if stages:
             stages.progress(
                 identifier,
@@ -93,6 +142,7 @@ def build_controller_graph(
                 domain=result.intent.domain.value,
                 action=result.intent.action.value,
                 route=final_route,
+                answer_source=result.answer_source,
             )
             stages.complete(identifier, StageName.UNDERSTANDING)
         return {
@@ -100,6 +150,7 @@ def build_controller_graph(
             "intent": result.intent.model_dump(mode="json"),
             "scope": result.scope.model_dump(mode="json"),
             "route": final_route,
+            "answer_source": result.answer_source,
             "risk_level": result.risk_level.value,
             "missing_fields": result.missing_fields,
             "clarification_question": result.clarification_question,
@@ -128,26 +179,38 @@ def build_controller_graph(
             # With an attached image, skip the deterministic capability answer so
             # the vision responder actually reads the picture and answers about
             # it, instead of returning a static capabilities statement.
-            capability_answer = None if has_images else build_capability_answer(state)
+            capability_answer = (
+                None
+                if has_images or understanding.answer_source == "history"
+                else build_capability_answer(state)
+            )
             if stages:
                 stages.start(identifier, StageName.SYNTHESIS, title="正在分析图片" if has_images else "正在整理回复")
             reporter = StageReporter(controller=stages, run_id=identifier, stage=StageName.SYNTHESIS) if stages else None
             response = None
             streamed = False
             if responder and capability_answer is None:
-                stream = getattr(responder, "stream", None)
-                if callable(stream) and reporter:
-                    response = stream(
-                        dict(state),
-                        on_delta=lambda text: reporter.emit("response.delta", text=text),
-                        on_reasoning_delta=lambda text: reporter.emit("reasoning.delta", text=text),
+                try:
+                    stream = getattr(responder, "stream", None)
+                    if callable(stream) and reporter:
+                        response = stream(
+                            dict(state),
+                            on_delta=lambda text: reporter.emit("response.delta", text=text),
+                            on_reasoning_delta=lambda text: reporter.emit("reasoning.delta", text=text),
+                        )
+                        streamed = True
+                    else:
+                        responder_state = dict(state)
+                        if reporter is not None:
+                            responder_state["_stage_reporter"] = reporter
+                        response = responder.invoke(responder_state)
+                except Exception:
+                    if understanding.answer_source != "history":
+                        raise
+                    response = FinalResponse(
+                        answer="暂时无法基于本次对话的历史记录生成回复；本轮未重新调用数据工具。"
                     )
-                    streamed = True
-                else:
-                    responder_state = dict(state)
-                    if reporter is not None:
-                        responder_state["_stage_reporter"] = reporter
-                    response = responder.invoke(responder_state)
+                    streamed = False
             answer = capability_answer or (
                 response.answer if response else understanding.normalized_request
             )
@@ -198,6 +261,7 @@ def build_controller_graph(
                 understanding.intent,
                 understanding.scope,
                 understanding.normalized_request,
+                response_mode=understanding.response_mode,
             )
         except Exception as exc:
             if stages:
@@ -255,20 +319,29 @@ def build_controller_graph(
                 else:
                     specialist_state = dict(state)
                     if stages:
+                        understanding = UnderstandRequestResult.model_validate(
+                            state["understanding"]
+                        )
                         specialist_state["_stage_reporter"] = StageReporter(
                             controller=stages,
                             run_id=identifier,
                             stage=stage,
                             base_data={"unit_id": task.agent.value, "task_id": task.task_id},
+                            suppressed_kinds=(
+                                frozenset({"response.delta", "response.completed"})
+                                if understanding.response_mode == "competitor_report"
+                                else frozenset()
+                            ),
                         )
                     result = specialist.invoke(task, scope, specialist_state)
                 if stages:
-                    if result.status == "needs_input":
-                        kind = "unit.waiting"
-                    elif result.status == "completed" and not result.errors:
-                        kind = "unit.completed"
-                    else:
-                        kind = "unit.failed"
+                    kind = {
+                        "completed": "unit.completed",
+                        "degraded": "unit.degraded",
+                        "failed": "unit.failed",
+                        "needs_input": "unit.waiting",
+                        "unavailable": "unit.unavailable",
+                    }[result.status]
                     stages.progress(
                         identifier,
                         stage,
@@ -316,12 +389,17 @@ def build_controller_graph(
                         })
 
         if stages:
+            degraded_units = sum(result.status == "degraded" for result in results)
+            failed_units = len(errors) + sum(
+                result.status in {"failed", "unavailable"} for result in results
+            )
             stages.complete(
                 identifier,
                 stage,
                 total_units=len(tasks),
                 completed_units=len(results),
-                failed_units=len(errors) + sum(bool(result.errors) for result in results),
+                degraded_units=degraded_units,
+                failed_units=failed_units,
             )
 
         return {
@@ -356,11 +434,45 @@ def build_controller_graph(
             SpecialistResult.model_validate(item)
             for item in state.get("specialist_results", [])
         ]
-        return (
-            "waiting_input"
-            if any(result.status == "needs_input" for result in results)
-            else "prepare_followups"
+        if any(result.status == "needs_input" for result in results):
+            return "waiting_input"
+        return "process_competitor_data"
+
+    def process_competitor_data(state: AmazonOpsState) -> dict:
+        """Write deterministic, internal-only report modules after a Sif comparison."""
+        if competitor_data_processor is None or state.get("competitor_data_modules"):
+            return {}
+        results = [SpecialistResult.model_validate(item) for item in state.get("specialist_results", [])]
+        candidate = next(
+            (
+                result
+                for result in results
+                if result.agent == SpecialistName.COMPETITOR_ADVERTISING
+                and result.status in {"completed", "degraded"}
+            ),
+            None,
         )
+        if candidate is None:
+            return {}
+        scope = QueryScope.model_validate(state["scope"])
+        identifier = run_id(state) if stages else ""
+        if stages:
+            stages.start(identifier, StageName.DATA_PROCESSING, title="正在处理竞品广告数据")
+            stages.progress(identifier, StageName.DATA_PROCESSING, kind="competitor.processing.started")
+        try:
+            modules, error = competitor_data_processor.process_modules(scope=scope, result=candidate)
+        except Exception as exc:
+            modules, error = None, {"code": "COMPETITOR_PROCESSING_FAILED", "last_error": type(exc).__name__}
+        if error or modules is None:
+            failure = error or {"code": "COMPETITOR_PROCESSING_FAILED", "last_error": "NO_MODULES"}
+            if stages:
+                stages.progress(identifier, StageName.DATA_PROCESSING, kind="competitor.processing.failed", error=failure["code"])
+                stages.complete(identifier, StageName.DATA_PROCESSING)
+            return {"competitor_processing_errors": [failure]}
+        if stages:
+            stages.progress(identifier, StageName.DATA_PROCESSING, kind="competitor.processing.completed")
+            stages.complete(identifier, StageName.DATA_PROCESSING)
+        return {"competitor_data_modules": modules.model_dump(mode="json")}
 
     def specialist_waiting_input(state: AmazonOpsState) -> dict:
         results = [
@@ -384,7 +496,157 @@ def build_controller_graph(
         }
 
     def after_followups(state: AmazonOpsState) -> str:
-        return "execute" if state.get("pending_tasks") else "aggregate"
+        if state.get("pending_tasks"):
+            return "execute"
+        understanding = UnderstandRequestResult.model_validate(state["understanding"])
+        if understanding.response_mode == "competitor_report" and competitor_report_writer is not None:
+            return "report"
+        return "aggregate"
+
+    def generate_competitor_report(state: AmazonOpsState) -> dict:
+        identifier = run_id(state) if stages else ""
+        report_title = competitor_report_title(dict(state))
+        if stages:
+            stages.start(identifier, StageName.SYNTHESIS, title="正在生成竞品对比报告")
+            stages.progress(
+                identifier,
+                StageName.SYNTHESIS,
+                kind="report.started",
+                title=report_title,
+            )
+        try:
+            writer_state = dict(state)
+            if stages:
+                writer_state["_stage_reporter"] = StageReporter(
+                    controller=stages, run_id=identifier, stage=StageName.SYNTHESIS
+                )
+            assert competitor_report_writer is not None
+            existing_sections = {
+                item.key: item
+                for item in (
+                    CompetitorReportSection.model_validate(raw)
+                    for raw in state.get("competitor_report_sections", [])
+                )
+                if item.key in SECTION_TITLES
+            }
+            sections: list[CompetitorReportSection] = []
+            for section_index, section_key in enumerate(SECTION_TITLES, start=1):
+                section = existing_sections.get(section_key)
+                if section is None:
+                    last_error = "COMPETITOR_REPORT_SECTION_FAILED"
+                    for attempt in range(1, 4):
+                        if stages:
+                            stages.progress(
+                                identifier,
+                                StageName.SYNTHESIS,
+                                kind="report.section.started",
+                                section_key=section_key,
+                                section_index=section_index,
+                                attempt=attempt,
+                            )
+                        try:
+                            section = validate_competitor_report_section(
+                                competitor_report_writer.invoke_section(
+                                    writer_state, section_key
+                                ),
+                                section_key,
+                                writer_state,
+                            )
+                            break
+                        except Exception as exc:
+                            last_error = getattr(exc, "code", None) or type(exc).__name__
+                            if stages:
+                                stages.progress(
+                                    identifier,
+                                    StageName.SYNTHESIS,
+                                    kind="report.section.failed",
+                                    section_key=section_key,
+                                    section_index=section_index,
+                                    attempt=attempt,
+                                    error=last_error,
+                                )
+                                if attempt < 3:
+                                    stages.progress(
+                                        identifier,
+                                        StageName.SYNTHESIS,
+                                        kind="report.retrying",
+                                        section_key=section_key,
+                                        section_index=section_index,
+                                        attempt=attempt + 1,
+                                        max_attempts=3,
+                                        error=last_error,
+                                    )
+                    if section is None:
+                        section = CompetitorReportSection(
+                            key=section_key,
+                            status="unavailable",
+                            content="本章生成失败，已保留其他通过校验的章节。",
+                            missing_reasons=[last_error],
+                        )
+                sections.append(section)
+                section_text = render_competitor_report_section(section)
+                if section_index == 1:
+                    section_text = f"# {report_title}{section_text}"
+                if stages:
+                    stages.progress(
+                        identifier,
+                        StageName.SYNTHESIS,
+                        kind="report.section.delta",
+                        section_key=section_key,
+                        section_index=section_index,
+                        text=section_text,
+                    )
+                    stages.progress(
+                        identifier,
+                        StageName.SYNTHESIS,
+                        kind="report.section.completed",
+                        section_key=section_key,
+                        section_index=section_index,
+                        status=section.status,
+                    )
+                if report_checkpoint is not None:
+                    report_checkpoint(
+                        identifier,
+                        {
+                            **dict(state),
+                            "competitor_report_sections": [
+                                item.model_dump(mode="json") for item in sections
+                            ],
+                            "resume_next": "generate_competitor_report",
+                        },
+                    )
+            report = validate_competitor_report(
+                CompetitorAdvertisingReport(
+                    title=report_title, sections=sections
+                ),
+                writer_state,
+            )
+            answer = render_competitor_report(report)
+            response = FinalResponse(
+                answer=answer,
+                confirmed_findings=report.confirmed_findings,
+                open_hypotheses=report.open_hypotheses,
+                recommended_actions=report.recommended_actions,
+                deliverables=[{"type": "competitor_advertising_report", "report": report.model_dump(mode="json")}],
+            )
+        except Exception as exc:
+            response = FinalResponse(
+                answer="竞品对比报告暂时无法生成；已完成的数据读取不会被视为报告结论，请稍后重试。"
+            )
+            if stages:
+                # A stable code, not ``str(exc)``: a validation failure carries the
+                # whole raw report, which must not reach the SSE stream.
+                stages.fail(identifier, StageName.SYNTHESIS, getattr(exc, "code", None) or "COMPETITOR_REPORT_FAILED")
+            return {"final_response": response.model_dump(mode="json")}
+        if stages:
+            stages.progress(
+                identifier,
+                StageName.SYNTHESIS,
+                kind="report.completed",
+            )
+            stages.complete(identifier, StageName.SYNTHESIS)
+            stages.finish(identifier, status="completed", result=response.model_dump(mode="json"))
+        return {"competitor_report": report.model_dump(mode="json"), "final_response": response.model_dump(mode="json")}
 
     def aggregate_response(state: AmazonOpsState) -> dict:
         identifier = run_id(state) if stages else ""
@@ -423,7 +685,7 @@ def build_controller_graph(
                 for item in state.get("specialist_results", [])
             ]
             all_specialists_failed = bool(specialist_results) and all(
-                item.status != "completed" for item in specialist_results
+                item.status not in {"completed", "degraded"} for item in specialist_results
             )
             if all_specialists_failed:
                 stages.fail(identifier, StageName.SYNTHESIS, response.answer)
@@ -449,11 +711,30 @@ def build_controller_graph(
     graph.add_node("direct_response", direct_response)
     graph.add_node("create_plan", create_plan)
     graph.add_node("execute_specialists", execute_specialists)
+    graph.add_node("process_competitor_data", process_competitor_data)
     graph.add_node("prepare_followups", prepare_followups)
     graph.add_node("specialist_waiting_input", specialist_waiting_input)
     graph.add_node("aggregate_response", aggregate_response)
+    graph.add_node("generate_competitor_report", generate_competitor_report)
 
-    graph.add_edge(START, "understand_request")
+    def resume_from_checkpoint(state: AmazonOpsState) -> str:
+        return state.get("resume_next", "understand_request")
+
+    graph.add_conditional_edges(
+        START,
+        resume_from_checkpoint,
+        {
+            "understand_request": "understand_request",
+            "direct_response": "direct_response",
+            "create_plan": "create_plan",
+            "execute_specialists": "execute_specialists",
+            "process_competitor_data": "process_competitor_data",
+            "prepare_followups": "prepare_followups",
+            "specialist_waiting_input": "specialist_waiting_input",
+            "aggregate_response": "aggregate_response",
+            "generate_competitor_report": "generate_competitor_report",
+        },
+    )
     graph.add_conditional_edges(
         "understand_request",
         after_understanding,
@@ -472,14 +753,16 @@ def build_controller_graph(
         after_specialist_execution,
         {
             "waiting_input": "specialist_waiting_input",
-            "prepare_followups": "prepare_followups",
+            "process_competitor_data": "process_competitor_data",
         },
     )
+    graph.add_edge("process_competitor_data", "prepare_followups")
     graph.add_edge("specialist_waiting_input", END)
     graph.add_conditional_edges(
         "prepare_followups",
         after_followups,
-        {"execute": "execute_specialists", "aggregate": "aggregate_response"},
+        {"execute": "execute_specialists", "aggregate": "aggregate_response", "report": "generate_competitor_report"},
     )
     graph.add_edge("aggregate_response", END)
+    graph.add_edge("generate_competitor_report", END)
     return graph.compile()

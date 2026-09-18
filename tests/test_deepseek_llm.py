@@ -14,8 +14,14 @@ from amazon_ops import (
 )
 from amazon_ops.deepseek_runtime import build_deepseek_model_roles, build_deepseek_react_model
 from amazon_ops.events import InMemoryEventHub, StageController, StageName, StageReporter
+from amazon_ops.interfaces import DeepSeekCompetitorReportWriter
 from amazon_ops.listing import DeepSeekListingCopywriter, ListingDraft
-from amazon_ops.models import FinalResponse, UnderstandRequestResult
+from amazon_ops.llm import MAX_COMPLETION_TOKENS
+from amazon_ops.models import (
+    CompetitorAdvertisingReport,
+    FinalResponse,
+    UnderstandRequestResult,
+)
 
 
 def test_deepseek_config_uses_default_url_when_host_sets_empty_override(monkeypatch, tmp_path):
@@ -24,6 +30,22 @@ def test_deepseek_config_uses_default_url_when_host_sets_empty_override(monkeypa
     config = DeepSeekConfig.from_env(env_file=tmp_path / "missing.env")
 
     assert config.base_url == "https://api.deepseek.com"
+
+
+def test_competitor_report_writer_uses_maximum_completion_budget():
+    class RecordingLLM:
+        def __init__(self):
+            self.max_tokens = None
+
+        def complete(self, *, max_tokens=None, **_kwargs):
+            self.max_tokens = max_tokens
+            return CompetitorAdvertisingReport(title="报告")
+
+    llm = RecordingLLM()
+
+    DeepSeekCompetitorReportWriter(llm).invoke({})
+
+    assert llm.max_tokens == MAX_COMPLETION_TOKENS
 
 
 def test_react_model_disables_thinking_by_default(monkeypatch, tmp_path):
@@ -65,6 +87,7 @@ def test_build_deepseek_model_roles_propagates_reasoning_effort(monkeypatch, tmp
     assert roles.advertising_react_model.extra_body == {
         "thinking": {"type": "enabled"}, "reasoning_effort": "high"
     }
+    assert roles.competitor_report_writer.llm is roles.llm
 
 
 def test_deepseek_client_requests_current_model_and_validates_json_output():

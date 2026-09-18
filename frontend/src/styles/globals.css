@@ -11,6 +11,17 @@
 
 @import './theme.css';
 
+:root {
+  --font-google-sans-flex: ui-sans-serif;
+  --font-source-code-pro: ui-monospace;
+  --font-inter: ui-sans-serif;
+  --font-playfair-display: ui-serif;
+  --font-jetbrains-mono: ui-monospace;
+  --font-outfit: ui-sans-serif;
+  --font-merriweather: ui-serif;
+  --font-fira-code: ui-monospace;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

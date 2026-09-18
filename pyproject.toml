@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
   "argon2-cffi>=23.1,<24.0",
   "fastapi>=0.116,<1.0",
-  "httpx>=0.28,<1.0",
+  "httpx[socks]>=0.28,<1",
   "langgraph>=1.0,<2.0",
   "langchain-openai>=1.1,<2.0",
   "langsmith>=0.10,<1.0",
@@ -19,6 +19,7 @@ dependencies = [
   "python-dotenv>=1.0,<2.0",
   "uvicorn>=0.35,<1.0",
   "sqlglot>=26,<27",
+  "langfuse>=3.0,<4.0",
 ]
 
 [project.optional-dependencies]

@@ -111,3 +111,72 @@ def test_only_one_in_memory_worker_can_compact_the_same_turn_range():
         second = executor.submit(memory.compact, "owner-a", "conversation-a", summarize)
         assert sorted([first.result(), second.result()]) == [False, True]
     assert calls == 1
+
+
+def test_a_replayed_turn_does_not_record_the_answer_twice():
+    """Recovering an interrupted run replays the node that was in flight."""
+
+    memory = InMemoryConversationStore()
+
+    memory.append("owner-a", "run-1", role="user", content="看下利润", turn_id="run-1")
+    memory.append("owner-a", "run-1", role="assistant", content="利润是 10%。", turn_id="run-1")
+    # 恢复后重跑同一个 turn
+    memory.append("owner-a", "run-1", role="assistant", content="利润是 10%。", turn_id="run-1")
+
+    assert [item["content"] for item in memory.history("owner-a", "run-1")] == [
+        "看下利润",
+        "利润是 10%。",
+    ]
+
+
+def test_the_first_write_of_a_turn_wins():
+    """A retry can produce different text; the answer already shown is kept."""
+
+    memory = InMemoryConversationStore()
+
+    memory.append("owner-a", "run-2", role="assistant", content="第一次的回答", turn_id="run-2")
+    memory.append("owner-a", "run-2", role="assistant", content="重试后不同的回答", turn_id="run-2")
+
+    assert [item["content"] for item in memory.history("owner-a", "run-2")] == ["第一次的回答"]
+
+
+def test_both_roles_of_one_turn_are_kept():
+    memory = InMemoryConversationStore()
+
+    memory.append("owner-a", "run-3", role="user", content="问题", turn_id="run-3")
+    memory.append("owner-a", "run-3", role="assistant", content="答案", turn_id="run-3")
+
+    assert [item["content"] for item in memory.history("owner-a", "run-3")] == ["问题", "答案"]
+
+
+def test_distinct_turns_are_all_kept():
+    memory = InMemoryConversationStore()
+
+    memory.append("owner-a", "run-4", role="assistant", content="答案一", turn_id="run-4")
+    memory.append("owner-a", "run-4", role="assistant", content="答案二", turn_id="run-5")
+
+    assert [item["content"] for item in memory.history("owner-a", "run-4")] == ["答案一", "答案二"]
+
+
+def test_writes_without_a_turn_id_are_not_deduplicated():
+    """Without a turn id there is nothing that identifies a repeat."""
+
+    memory = InMemoryConversationStore()
+
+    memory.append("owner-a", "run-6", role="assistant", content="同样的内容")
+    memory.append("owner-a", "run-6", role="assistant", content="同样的内容")
+    memory.append("owner-a", "run-6", role="assistant", content="同样的内容", turn_id="   ")
+
+    assert len(memory.history("owner-a", "run-6")) == 3
+
+
+def test_turn_deduplication_is_scoped_to_one_conversation_and_owner():
+    memory = InMemoryConversationStore()
+
+    memory.append("owner-a", "run-7", role="assistant", content="A 的答案", turn_id="shared-turn")
+    memory.append("owner-a", "run-8", role="assistant", content="另一段对话的答案", turn_id="shared-turn")
+    memory.append("owner-b", "run-7", role="assistant", content="B 的答案", turn_id="shared-turn")
+
+    assert [item["content"] for item in memory.history("owner-a", "run-7")] == ["A 的答案"]
+    assert [item["content"] for item in memory.history("owner-a", "run-8")] == ["另一段对话的答案"]
+    assert [item["content"] for item in memory.history("owner-b", "run-7")] == ["B 的答案"]

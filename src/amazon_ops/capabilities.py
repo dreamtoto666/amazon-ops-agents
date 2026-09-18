@@ -31,10 +31,17 @@ def build_capability_answer(state: Mapping[str, Any]) -> str | None:
         and isinstance(agents.get("listing_content"), Mapping)
         and agents["listing_content"].get("specialist_registered")
     )
+    competitor_advertising_registered = bool(
+        isinstance(agents, Mapping)
+        and isinstance(agents.get("competitor_advertising"), Mapping)
+        and agents["competitor_advertising"].get("specialist_registered")
+    )
 
     if "卖家精灵" in text or "sellersprite" in text:
         if not _configured(mcp, "seller_sprite"):
             return "卖家精灵 MCP 当前未配置，暂时不能调用。"
+        if competitor_advertising_registered and ("竞品" in text or "广告" in text):
+            return "卖家精灵 MCP 当前仅由 Listing 文案 Agent 用于关键词研究；竞品专家不使用卖家精灵。"
         if listing_registered:
             return (
                 "可以。卖家精灵 MCP 已配置，并已接入 Listing 文案 Agent，用于关键词挖掘、"
@@ -48,6 +55,8 @@ def build_capability_answer(state: Mapping[str, Any]) -> str | None:
     if "sif" in text:
         if not _configured(mcp, "sif"):
             return "Sif MCP 当前未配置，暂时不能调用。"
+        if competitor_advertising_registered and ("竞品" in text or "广告" in text):
+            return "可以。Sif MCP 已接入竞品专家，用于自有 ASIN 与竞品的销量、流量、关键词和广告架构只读对比；只会展示实际返回且可比较的数据。"
         if listing_registered:
             return (
                 "可以。Sif MCP 已配置，并已接入 Listing 文案 Agent，用于关键词、流量和 "

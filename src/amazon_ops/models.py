@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -54,6 +54,16 @@ class SpecialistName(str, Enum):
     INVENTORY = "inventory"
     MARKET_RISK = "market_risk"
     LISTING_CONTENT = "listing_content"
+    COMPETITOR_ADVERTISING = "competitor_advertising"
+
+
+SpecialistStatus = Literal[
+    "completed",
+    "degraded",
+    "failed",
+    "needs_input",
+    "unavailable",
+]
 
 
 class DateRange(BaseModel):
@@ -71,9 +81,14 @@ class QueryScope(BaseModel):
     shop_ids: list[str] = Field(default_factory=list)
     marketplaces: list[str] = Field(default_factory=list)
     asins: list[str] = Field(default_factory=list)
+    # Kept separate from ``asins`` so a comparison never guesses which ASIN is
+    # the operator's product and which ones belong to competitors.
+    own_asin: str | None = None
+    competitor_asins: list[str] = Field(default_factory=list)
     mskus: list[str] = Field(default_factory=list)
     skus: list[str] = Field(default_factory=list)
     campaign_ids: list[str] = Field(default_factory=list)
+    ad_group_ids: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     period: AnalysisPeriod | None = None
     currency: str | None = None
@@ -97,6 +112,10 @@ class UnderstandRequestResult(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     clarification_question: str | None = None
     normalized_request: str
+    response_mode: Literal["chat", "competitor_report"] = "chat"
+    # Old checkpoints did not carry this field. Defaulting to live preserves
+    # their conservative behavior of querying operational data.
+    answer_source: Literal["history", "live", "general"] = "live"
 
 
 class AgentTask(BaseModel):
@@ -123,6 +142,155 @@ class DataArtifact(BaseModel):
     fetched_at: str | None = None
 
 
+ProcessedDataStatus = Literal["available", "partial", "unavailable"]
+CompetitorProfileSectionName = Literal[
+    "ad_architecture",
+    "traffic_structure",
+    "keyword_coverage",
+    "operations_history",
+    "campaign_detail",
+    "ad_group_detail",
+    "recommendation_traffic",
+]
+ProcessedScalar = str | int | float | bool | None
+
+
+class CompetitorProfileFact(BaseModel):
+    field: str = Field(min_length=1)
+    own_value: ProcessedScalar = None
+    competitor_value: ProcessedScalar = None
+    unit: str | None = None
+    comparison: str = Field(min_length=1)
+    source_names: list[str] = Field(min_length=1)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class CompetitorProfileSection(BaseModel):
+    section: CompetitorProfileSectionName
+    status: ProcessedDataStatus
+    facts: list[CompetitorProfileFact] = Field(default_factory=list)
+    key_gaps: list[str] = Field(default_factory=list)
+    source_names: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class CompetitorProfile(BaseModel):
+    competitor_asin: str = Field(min_length=1)
+    status: ProcessedDataStatus
+    sections: list[CompetitorProfileSection] = Field(default_factory=list)
+    source_names: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class CompetitorProfiles(BaseModel):
+    own_asin: str = Field(min_length=1)
+    marketplace: str = Field(min_length=1)
+    profiles: list[CompetitorProfile] = Field(min_length=1)
+
+
+class CompetitorDataModule(BaseModel):
+    """One evidence-bounded data module passed to the competitor report agent."""
+
+    status: ProcessedDataStatus
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    missing_reasons: list[str] = Field(default_factory=list)
+
+
+AsinRole = Literal["own", "competitor"]
+
+
+class VariantTrafficRecord(BaseModel):
+    variant_asin: str = Field(min_length=1, max_length=32)
+    variant_attributes: Any = None
+    total_traffic_ratio: float | None = None
+    natural_traffic_ratio: float | None = None
+    ad_traffic_ratio: float | None = None
+    sp_ratio: float | None = None
+    sp_recommend_ratio: float | None = None
+    sb_ratio: float | None = None
+    sbv_ratio: float | None = None
+
+
+class TrafficKeywordLookupRecord(BaseModel):
+    asin_role: AsinRole
+    parent_asin: str = Field(min_length=1, max_length=32)
+    listing_natural_traffic: Any = None
+    listing_ad_traffic: Any = None
+    advertising_traffic_distribution: Any = None
+    variants: list[VariantTrafficRecord] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class TrafficKeywordReverseLookupRecord(BaseModel):
+    asin_role: AsinRole
+    parent_asin: str = Field(min_length=1, max_length=32)
+    keyword: str = Field(min_length=1)
+    total_traffic_ratio: float
+    natural_traffic_ratio: float
+    ad_traffic_ratio: float
+    growth_period_change: float | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class MultiVariantOrganicVariantRecord(BaseModel):
+    variant_asin: str = Field(min_length=1, max_length=32)
+    natural_traffic_ratio: float
+    natural_position_days: int | None = None
+    average_natural_rank: float | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class MultiVariantOrganicPositionRecord(BaseModel):
+    asin_role: AsinRole
+    parent_asin: str = Field(min_length=1, max_length=32)
+    keyword: str = Field(min_length=1)
+    natural_traffic: float | None = None
+    natural_traffic_ratio: float
+    multi_organic_extra_natural_traffic: float | None = None
+    variants: list[MultiVariantOrganicVariantRecord] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class RecommendationPlacementRecord(BaseModel):
+    asin_role: AsinRole
+    parent_asin: str = Field(min_length=1, max_length=32)
+    period: str = Field(min_length=1)
+    placement_name: str = Field(min_length=1)
+    traffic_ratio: float
+    campaign_ids: list[str] = Field(default_factory=list)
+    campaign_count: int | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class TrafficKeywordLookupModule(CompetitorDataModule):
+    records: list[TrafficKeywordLookupRecord] = Field(default_factory=list)
+
+
+class TrafficKeywordReverseLookupModule(CompetitorDataModule):
+    records: list[TrafficKeywordReverseLookupRecord] = Field(default_factory=list)
+
+
+class MultiVariantOrganicPositionModule(CompetitorDataModule):
+    records: list[MultiVariantOrganicPositionRecord] = Field(default_factory=list)
+
+
+class RecommendationPlacementModule(CompetitorDataModule):
+    records: list[RecommendationPlacementRecord] = Field(default_factory=list)
+
+
+class CompetitorDataModules(BaseModel):
+    """The four fixed modules requested for a parent-ASIN comparison."""
+
+    own_parent_asin: str = Field(min_length=1, max_length=32)
+    competitor_parent_asin: str = Field(min_length=1, max_length=32)
+    marketplace: str = Field(min_length=1, max_length=16)
+    traffic_keyword_lookup: TrafficKeywordLookupModule
+    traffic_keyword_reverse_lookup: TrafficKeywordReverseLookupModule
+    multi_variant_organic_position: MultiVariantOrganicPositionModule
+    recommendation_placement: RecommendationPlacementModule
+
+
 class Hypothesis(BaseModel):
     description: str
     requires_agent: SpecialistName | None = None
@@ -146,7 +314,7 @@ class RecommendedAction(BaseModel):
 class SpecialistResult(BaseModel):
     task_id: str
     agent: SpecialistName
-    status: str = "completed"
+    status: SpecialistStatus = "completed"
     summary: str
     findings: list[Finding] = Field(default_factory=list)
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
@@ -161,3 +329,23 @@ class FinalResponse(BaseModel):
     open_hypotheses: list[Hypothesis] = Field(default_factory=list)
     recommended_actions: list[RecommendedAction] = Field(default_factory=list)
     deliverables: list[dict[str, Any]] = Field(default_factory=list)
+
+
+ReportSectionStatus = Literal["available", "partial", "unavailable"]
+
+
+class CompetitorReportSection(BaseModel):
+    key: str = Field(min_length=1, max_length=64)
+    status: ReportSectionStatus
+    content: str = Field(min_length=1, max_length=5000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=30)
+    missing_reasons: list[str] = Field(default_factory=list, max_length=10)
+
+
+class CompetitorAdvertisingReport(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    sections: list[CompetitorReportSection] = Field(default_factory=list, max_length=4)
+    limitations: list[str] = Field(default_factory=list, max_length=20)
+    confirmed_findings: list[Finding] = Field(default_factory=list, max_length=30)
+    open_hypotheses: list[Hypothesis] = Field(default_factory=list, max_length=30)
+    recommended_actions: list[RecommendedAction] = Field(default_factory=list, max_length=30)
