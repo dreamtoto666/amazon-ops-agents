@@ -59,19 +59,21 @@
 ### `traffic_distribution`
 
 - `asin_role`、`parent_asin`
-- `listing_natural_traffic`、`listing_ad_traffic`、`advertising_traffic_distribution`
+- `listing_natural_traffic.{score,ratio}`、`listing_ad_traffic.{score,ratio}`
+- `advertising_traffic_distribution.sp`、`sp_recommend`、`sb`、`sbv` 的 `{score,ratio}`
 - `variants[].variant_asin`、`variant_attributes`、`total_traffic_ratio`、`natural_traffic_ratio`、`ad_traffic_ratio`、`sp_ratio`、`sp_recommend_ratio`、`sb_ratio`、`sbv_ratio`
-- `evidence_ids`
 
-表格 A：Listing 流量分布
+固定正文顺序：父 ASIN 自然-广告流量中文概述 → 父 ASIN 广告流量对比表 → 子 ASIN 流量分布表 → 数据分析。
 
-| 对象 | 父 ASIN | 自然流量 | 广告流量 | 广告流量分布 | 证据 |
-| --- | --- | --- | --- | --- | --- |
+父 ASIN 广告流量对比表：
 
-表格 B：变体流量分布
+| ASIN 角色 | 父 ASIN | SP（常规）广告流量得分 | SP（常规）流量占比 | SP（推荐）广告流量得分 | SP（推荐）流量占比 | SB（常规）广告流量得分 | SB（常规）流量占比 | SBV 广告流量得分 | SBV 流量占比 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
-| 对象 | 父 ASIN | 变体 ASIN | 变体属性 | 总流量占比 | 自然流量占比 | 广告流量占比 | SP（常规）占比 | SP（推荐）占比 | SB（常规）占比 | SBV 占比 | 证据 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+子 ASIN 流量分布表：
+
+| # | ASIN 角色 | 父 ASIN | 变体 ASIN | 总流量占比 | 自然-广告流量分布 | 自然流量占比 | SP（常规）流量占比 | SP（推荐）流量占比 | SB（常规）流量占比 | SBV 流量占比 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 ### `keyword_traffic_comparison`
 
@@ -135,4 +137,4 @@
 
 - 不改变前端界面或 SSE 事件。
 - 不增加关键词、变体或专栏的额外过滤条件。
-- 不把广告 Agent 的建议、私有广告指标或未验证推断写入数据模块模板。
+- 不把广告 Agent 的建议或未验证推断写入数据模块模板。

@@ -1,4 +1,4 @@
-"""Convert bounded Sif competitor evidence into compact state-tree profiles."""
+"""Build deterministic competitor report modules from returned Sif fields."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ from collections import defaultdict
 from typing import Any
 
 from .competitor_research_catalog import CAPABILITY_BY_TOOL
-from .llm import StructuredLLM
-from .models import CompetitorProfiles, QueryScope, SpecialistResult
+from .models import QueryScope, SpecialistResult
 from .models import (
     CompetitorDataModules,
     MultiVariantOrganicPositionModule,
@@ -18,70 +17,10 @@ from .models import (
     TrafficKeywordLookupModule,
     TrafficKeywordReverseLookupModule,
 )
-from .prompts import COMPETITOR_DATA_PROCESSOR_SYSTEM_PROMPT
-
-
-COMPETITOR_PROFILE_MAX_TOKENS = 16_000
-PRIVATE_METRIC_TERMS = ("spend", "bid", "acos", "roas", "orders", "cvr", "花费", "竞价", "订单", "转化率")
-# Reporting a private metric as unavailable is required by policy, so those
-# statements are allowed; only an unsupported assertion is a violation.
-UNAVAILABLE_MARKERS = (
-    "不可得", "不可用", "不可推断", "未返回", "未提供", "未披露", "无法", "缺少", "缺失",
-    "无数据", "不适用", "未知",
-    "unknown", "unavailable", "not available", "not provided", "missing", "no data", "cannot", "n/a",
-)
-_METRIC_VALUE = re.compile(r"\d")
-SECTION_BY_TOOL = {
-    "inspect_ad_architecture": "ad_architecture",
-    "analyze_traffic_structure": "traffic_structure",
-    "compare_traffic_keywords": "keyword_coverage",
-    "replay_operations_history": "operations_history",
-    "inspect_campaign": "campaign_detail",
-    "inspect_ad_group": "ad_group_detail",
-    "analyze_recommendation_traffic": "recommendation_traffic",
-}
 
 
 class CompetitorDataProcessor:
     """A bounded structured-LLM transformation, separate from report writing."""
-
-    def __init__(self, llm: StructuredLLM, *, max_attempts: int = 3) -> None:
-        self._llm = llm
-        self._max_attempts = max_attempts
-
-    def process(
-        self, *, scope: QueryScope, result: SpecialistResult
-    ) -> tuple[CompetitorProfiles | None, dict[str, Any] | None]:
-        context, evidence_ids, source_names, truncated_sources = build_processor_context(scope, result)
-        if not evidence_ids:
-            return None, {"code": "COMPETITOR_PROCESSING_NO_EVIDENCE"}
-
-        last_error: str | None = None
-        for attempt in range(1, self._max_attempts + 1):
-            try:
-                output = self._llm.complete(
-                    system_prompt=COMPETITOR_DATA_PROCESSOR_SYSTEM_PROMPT,
-                    context=context,
-                    output_model=CompetitorProfiles,
-                    max_tokens=COMPETITOR_PROFILE_MAX_TOKENS,
-                )
-                return (
-                    validate_competitor_profiles(
-                        output,
-                        scope=scope,
-                        evidence_ids=evidence_ids,
-                        source_names=source_names,
-                        truncated_sources=truncated_sources,
-                    ),
-                    None,
-                )
-            except Exception as exc:
-                last_error = getattr(exc, "code", None) or type(exc).__name__
-        return None, {
-            "code": "COMPETITOR_PROCESSING_FAILED",
-            "attempts": self._max_attempts,
-            "last_error": last_error or "UNKNOWN",
-        }
 
     def process_modules(
         self, *, scope: QueryScope, result: SpecialistResult
@@ -195,13 +134,29 @@ def _traffic_keyword_lookup(
             continue
         overview, overview_evidence = overview_by_parent.get(parent, ({}, ""))
         overview_data = overview.get("overview") if isinstance(overview.get("overview"), dict) else {}
+        advertising_data = _first_mapping(
+            overview.get("ad"),
+            overview.get("adChannelBreakdown"),
+            overview_data.get("adChannelBreakdown"),
+        )
         records.append(
             {
                 "asin_role": role,
                 "parent_asin": parent,
-                "listing_natural_traffic": overview_data.get("nf"),
-                "listing_ad_traffic": overview_data.get("ad"),
-                "advertising_traffic_distribution": overview_data.get("ad"),
+                "listing_natural_traffic": _traffic_score_ratio(
+                    _first_value(overview_data, "nf", "naturalScore", "natural")
+                ),
+                "listing_ad_traffic": _traffic_score_ratio(
+                    _first_value(overview_data, "ad", "adScore", "advertising")
+                ),
+                "advertising_traffic_distribution": {
+                    "sp": _traffic_score_ratio(_first_value(advertising_data, "sp", "spScore")),
+                    "sp_recommend": _traffic_score_ratio(
+                        _first_value(advertising_data, "recommend", "recSp", "recSpScore")
+                    ),
+                    "sb": _traffic_score_ratio(_first_value(advertising_data, "sb", "sbScore")),
+                    "sbv": _traffic_score_ratio(_first_value(advertising_data, "sbv", "sbvScore")),
+                },
                 "variants": variants,
                 "evidence_ids": [
                     *evidence_ids_by_parent[parent],
@@ -473,6 +428,27 @@ def _number(value: Any) -> float | None:
     return None
 
 
+def _first_mapping(*values: Any) -> dict[str, Any]:
+    return next((value for value in values if isinstance(value, dict)), {})
+
+
+def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def _traffic_score_ratio(value: Any) -> dict[str, float | None]:
+    """Normalize a verified Sif traffic metric without changing its ratio unit."""
+    if not isinstance(value, dict):
+        return {"score": None, "ratio": None}
+    return {
+        "score": _number(_first_value(value, "score", "trafficScore")),
+        "ratio": _number(_first_value(value, "ratio", "scoreRatio", "trafficRatio")),
+    }
+
+
 def _int_number(value: Any) -> int | None:
     number = _number(value)
     return int(number) if number is not None and number.is_integer() else None
@@ -483,150 +459,3 @@ def _asin_value(value: Any) -> str | None:
         return None
     match = _ASIN_IN_TEXT.search(value.upper())
     return match.group(0) if match else None
-
-
-def build_processor_context(
-    scope: QueryScope, result: SpecialistResult
-) -> tuple[str, set[str], set[str], set[str]]:
-    """Collect every returned evidence item, in provider order, without sampling."""
-    evidence_ids: set[str] = set()
-    source_names: set[str] = set()
-    truncated_sources: set[str] = set()
-    selected: list[dict[str, Any]] = []
-
-    for deliverable in result.deliverables:
-        if deliverable.get("type") != "competitor_research":
-            continue
-        tools, results = deliverable.get("tools"), deliverable.get("results")
-        if not isinstance(tools, list) or not isinstance(results, list):
-            continue
-        for business_tool, tool_result in zip(tools, results, strict=True):
-            if business_tool not in SECTION_BY_TOOL or not isinstance(tool_result, dict) or not tool_result.get("ok"):
-                continue
-            capability = CAPABILITY_BY_TOOL.get(business_tool)
-            if capability is None:
-                continue
-            source_name = capability.title
-            for evidence in tool_result.get("evidence", []):
-                if not isinstance(evidence, dict) or not isinstance(evidence.get("evidence_id"), str):
-                    continue
-                evidence_id = evidence["evidence_id"]
-                query = evidence.get("query") if isinstance(evidence.get("query"), dict) else {}
-                selected.append(
-                    {
-                        "section": SECTION_BY_TOOL[business_tool],
-                        "source_name": source_name,
-                        "evidence_id": evidence_id,
-                        "query": query,
-                        "data": evidence.get("data"),
-                    }
-                )
-                evidence_ids.add(evidence_id)
-                source_names.add(source_name)
-
-    payload = {
-        "confirmed_scope": {
-            "own_asin": scope.own_asin,
-            "competitor_asins": list(dict.fromkeys(scope.competitor_asins)),
-            "marketplace": scope.marketplaces[0] if scope.marketplaces else None,
-        },
-        "source_names": sorted(source_names),
-        "truncated_source_names": sorted(truncated_sources),
-        "evidence": selected,
-    }
-    return json.dumps(payload, ensure_ascii=False, default=str), evidence_ids, source_names, truncated_sources
-
-
-def validate_competitor_profiles(
-    profiles: CompetitorProfiles,
-    *,
-    scope: QueryScope,
-    evidence_ids: set[str],
-    source_names: set[str],
-    truncated_sources: set[str],
-) -> CompetitorProfiles:
-    """Enforce provenance strictly and downgrade unsupported policy claims.
-
-    Fabricated provenance (unknown source or evidence, duplicated section, scope
-    mismatch) fails the attempt.  A claim about a competitor's private metric is
-    different: it is a violation of policy rather than a broken reference, so the
-    offending fact or note is dropped and the rest of the profile is kept.  That
-    keeps a compliant "this metric is unavailable" note while never presenting a
-    private metric as data, and it no longer burns all attempts on wording the
-    prompt already asks the model to avoid.
-    """
-
-    expected = list(dict.fromkeys(scope.competitor_asins))
-    if profiles.own_asin != scope.own_asin or profiles.marketplace != (scope.marketplaces[0] if scope.marketplaces else ""):
-        raise ValueError("COMPETITOR_PROFILE_SCOPE_MISMATCH")
-    if [profile.competitor_asin for profile in profiles.profiles] != expected:
-        raise ValueError("COMPETITOR_PROFILE_ASIN_MISMATCH")
-
-    validated_profiles = []
-    for profile in profiles.profiles:
-        seen_sections: set[str] = set()
-        validated_sections = []
-        for section in profile.sections:
-            if section.section in seen_sections:
-                raise ValueError("COMPETITOR_PROFILE_DUPLICATE_SECTION")
-            seen_sections.add(section.section)
-            if not set(section.source_names).issubset(source_names):
-                raise ValueError("COMPETITOR_PROFILE_UNKNOWN_SOURCE")
-
-            kept_facts = []
-            for fact in section.facts:
-                if not set(fact.source_names).issubset(source_names) or not set(fact.evidence_ids).issubset(evidence_ids):
-                    raise ValueError("COMPETITOR_PROFILE_UNKNOWN_EVIDENCE")
-                if _names_private_metric(fact.field) or _asserts_private_metric(fact.comparison):
-                    continue
-                kept_facts.append(fact)
-
-            updated = section.model_copy(
-                update={
-                    "facts": kept_facts,
-                    "key_gaps": [item for item in section.key_gaps if not _asserts_private_metric(item)],
-                    "limitations": [item for item in section.limitations if not _asserts_private_metric(item)],
-                }
-            )
-            if section.facts and not kept_facts and updated.status == "available":
-                # Nothing usable survived, so do not keep claiming this theme is covered.
-                updated = updated.model_copy(update={"status": "unavailable"})
-            if set(updated.source_names) & truncated_sources and updated.status == "available":
-                updated = updated.model_copy(update={"status": "partial"})
-            validated_sections.append(updated)
-
-        if not set(profile.source_names).issubset(source_names):
-            raise ValueError("COMPETITOR_PROFILE_UNKNOWN_SOURCE")
-        validated_profiles.append(
-            profile.model_copy(
-                update={
-                    "sections": validated_sections,
-                    "limitations": [item for item in profile.limitations if not _asserts_private_metric(item)],
-                }
-            )
-        )
-    return profiles.model_copy(update={"profiles": validated_profiles})
-
-
-def _names_private_metric(value: str | None) -> bool:
-    """True when a private metric is named at all (a compared field cannot be one)."""
-
-    return isinstance(value, str) and any(term in value.casefold() for term in PRIVATE_METRIC_TERMS)
-
-
-def _asserts_private_metric(value: str | None) -> bool:
-    """True when free text makes a claim about a private metric.
-
-    A value always makes it a claim.  Without a value, only an explicit
-    unavailability statement is allowed, because policy requires reporting those
-    as unavailable; naming the metric some other way is still treated as a claim.
-    """
-
-    if not isinstance(value, str):
-        return False
-    folded = value.casefold()
-    if not any(term in folded for term in PRIVATE_METRIC_TERMS):
-        return False
-    if _METRIC_VALUE.search(folded):
-        return True
-    return not any(marker in folded for marker in UNAVAILABLE_MARKERS)

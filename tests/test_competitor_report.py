@@ -1,15 +1,15 @@
-from amazon_ops.competitor_report import SECTION_TITLES, render_competitor_report, render_competitor_report_section, validate_competitor_report
+from amazon_ops.competitor_report import SECTION_TITLES, build_traffic_keyword_lookup_section, render_competitor_report, render_competitor_report_section, validate_competitor_report
 from amazon_ops.models import CompetitorAdvertisingReport, CompetitorReportSection
 
 
-def test_report_validation_drops_unknown_evidence_and_private_competitor_metrics():
+def test_report_validation_drops_unknown_evidence_references():
     report = CompetitorAdvertisingReport(
         title="报告",
         sections=[
             CompetitorReportSection(
                 key="traffic_keyword_lookup",
                 status="available",
-                content="竞品 ACOS 为 12%，需要立即跟随。",
+                content="公开流量结构存在差异。",
                 evidence_refs=["known", "invented"],
             ),
             CompetitorReportSection(
@@ -26,33 +26,11 @@ def test_report_validation_drops_unknown_evidence_and_private_competitor_metrics
 
     summary = next(item for item in validated.sections if item.key == "traffic_keyword_lookup")
     traffic = next(item for item in validated.sections if item.key == "multi_variant_organic_position")
-    assert summary.status == "partial"
-    assert "不可得" in summary.content
+    assert summary.status == "available"
+    assert summary.evidence_refs == ["known"]
     assert traffic.status == "partial"
     assert traffic.evidence_refs == []
     assert "EVIDENCE_REFERENCE_MISSING" in traffic.missing_reasons
-
-
-def test_private_metric_unavailable_disclaimer_does_not_erase_valid_budget_plan():
-    report = CompetitorAdvertisingReport(
-        title="报告",
-        sections=[
-            CompetitorReportSection(
-                key="traffic_keyword_reverse_lookup",
-                status="partial",
-                content=(
-                    "竞品花费、竞价、ACOS 和 ROAS 不可得，不作数值判断。\n"
-                    "建议将我方测试预算控制在可承受范围，先用 10% 流量进行小流量验证。"
-                ),
-            )
-        ],
-    )
-
-    validated = validate_competitor_report(report, {})
-    section = next(item for item in validated.sections if item.key == "traffic_keyword_reverse_lookup")
-
-    assert "10%" in section.content
-    assert section.missing_reasons == []
 
 
 def test_report_validation_accepts_evidence_from_competitor_data_modules():
@@ -120,6 +98,55 @@ def test_each_unavailable_module_still_renders_its_fixed_table():
             CompetitorReportSection(key=key, status="unavailable", content="该模块数据未返回。")
         )
         assert "|" in markdown
+
+
+def test_module_one_renders_fixed_parent_and_variant_tables_without_metadata():
+    state = {
+        "competitor_data_modules": {
+            "traffic_keyword_lookup": {
+                "status": "available",
+                "records": [
+                    {
+                        "asin_role": "own", "parent_asin": "B0OWN00001",
+                        "listing_natural_traffic": {"score": 10295.753978, "ratio": 0.8288},
+                        "listing_ad_traffic": {"score": 2126.13967946, "ratio": 0.1712},
+                        "advertising_traffic_distribution": {
+                            "sp": {"score": 1000.4, "ratio": 0.47},
+                            "sp_recommend": {"score": 500.5, "ratio": 0.24},
+                            "sb": {"score": 400.6, "ratio": 0.19},
+                            "sbv": {"score": 225.7, "ratio": 0.10},
+                        },
+                        "variants": [{"variant_asin": "B0OWN00002", "total_traffic_ratio": 0.9, "natural_traffic_ratio": 0.7, "ad_traffic_ratio": 0.3, "sp_ratio": 0.2, "sp_recommend_ratio": 0.1, "sb_ratio": 0.05, "sbv_ratio": 0.01}],
+                    },
+                    {
+                        "asin_role": "competitor", "parent_asin": "B0COMP0001",
+                        "listing_natural_traffic": {"score": 10869.78156927, "ratio": 0.748},
+                        "listing_ad_traffic": {"score": 3661.52955838, "ratio": 0.252},
+                        "advertising_traffic_distribution": {
+                            "sp": {"score": 1500.4, "ratio": 0.41},
+                            "sp_recommend": {"score": 900.5, "ratio": 0.25},
+                            "sb": {"score": 700.6, "ratio": 0.19},
+                            "sbv": {"score": 560.7, "ratio": 0.15},
+                        },
+                        "variants": [{"variant_asin": "B0COMP0002", "total_traffic_ratio": 0.8, "natural_traffic_ratio": 0.6, "ad_traffic_ratio": 0.4, "sp_ratio": 0.3, "sp_recommend_ratio": 0.1, "sb_ratio": 0.05, "sbv_ratio": 0.02}],
+                    },
+                ],
+            }
+        }
+    }
+
+    section = build_traffic_keyword_lookup_section(state)
+
+    assert section is not None
+    assert section.content.index("父 ASIN Listing 自然-广告流量分布") < section.content.index("### 父 ASIN 广告流量对比")
+    assert section.content.index("### 父 ASIN 广告流量对比") < section.content.index("### 子 ASIN 流量分布")
+    assert section.content.index("### 子 ASIN 流量分布") < section.content.index("**数据分析**")
+    assert "10,296" in section.content and "10,870" in section.content
+    assert "SP（推荐）广告流量得分" in section.content
+    assert "自然 70.00% / 广告 30.00%" in section.content
+    assert "证据" not in section.content
+    assert "数据状态" not in section.content
+    assert "缺少" not in section.content
 
 
 # --- 报告节点的错误路径（之前没有任何测试走过这里）---------------------------
@@ -327,7 +354,7 @@ def test_report_mode_suppresses_specialist_user_facing_deltas():
 def test_a_failed_report_writer_does_not_leak_the_raw_report_into_events():
     from amazon_ops.events import InMemoryEventHub, StageEventType
 
-    secret = "竞品 ACOS 为 12% 的内部草稿内容"
+    secret = "内部草稿内容-不得外泄"
     hub = InMemoryEventHub()
     graph = _report_graph(ExplodingReportWriter(ValueError(secret)), hub)
 

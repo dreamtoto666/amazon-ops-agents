@@ -357,10 +357,7 @@ class CompetitorResearchService:
             "untrusted_business_data": True,
             "evidence": evidence,
             "observation_window": self._summarize_observation_window(evidence, observation),
-            "limitations": [
-                "仅包含 Sif 实际返回的公开可见研究数据。",
-                "竞品私有花费、竞价、ACOS、ROAS、订单和 CVR 不可从本工具推断。",
-            ], "errors": errors,
+            "limitations": ["仅包含 Sif 实际返回的公开可见研究数据。"], "errors": errors,
         }
 
     @staticmethod

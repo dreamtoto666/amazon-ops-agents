@@ -1,23 +1,13 @@
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from amazon_ops.competitor_data_processor import (
-    COMPETITOR_PROFILE_MAX_TOKENS,
-    CompetitorDataProcessor,
-    build_processor_context,
-)
+from amazon_ops.competitor_data_processor import CompetitorDataProcessor
 from amazon_ops.events import InMemoryEventHub, StageController, StageEventType, StageName
 from amazon_ops.graph import build_controller_graph
 from amazon_ops.models import (
     Action,
     AgentTask,
-    CompetitorProfile,
-    CompetitorProfileFact,
-    CompetitorProfileSection,
-    CompetitorProfiles,
     CompetitorDataModules,
     MultiVariantOrganicPositionModule,
     RecommendationPlacementModule,
@@ -32,27 +22,6 @@ from amazon_ops.models import (
     UnderstandRequestResult,
     UserIntent,
 )
-
-
-class StubLLM:
-    def __init__(self, payload=None, error: Exception | None = None):
-        self.payload, self.error, self.calls = payload, error, 0
-
-    def complete(self, *, output_model, **_kwargs):
-        self.calls += 1
-        if self.error:
-            raise self.error
-        return output_model.model_validate(self.payload)
-
-
-class CapturingLLM(StubLLM):
-    def __init__(self, payload):
-        super().__init__(payload)
-        self.max_tokens = None
-
-    def complete(self, *, output_model, max_tokens=None, **_kwargs):
-        self.max_tokens = max_tokens
-        return super().complete(output_model=output_model)
 
 
 def _scope():
@@ -78,51 +47,6 @@ def _result(evidence=None):
     )
 
 
-def _profiles(*, evidence_id="competitor-evidence", source="流量结构", status="available"):
-    return {
-        "own_asin": "B0OWN00001",
-        "marketplace": "US",
-        "profiles": [
-            {
-                "competitor_asin": "B0COMP0001",
-                "status": status,
-                "source_names": [source],
-                "sections": [
-                    {
-                        "section": "traffic_structure",
-                        "status": status,
-                        "source_names": [source],
-                        "facts": [
-                            {
-                                "field": "SP 流量占比",
-                                "own_value": 18.2,
-                                "competitor_value": 31.6,
-                                "unit": "%",
-                                "comparison": "竞品高 13.4 个百分点",
-                                "source_names": [source],
-                                "evidence_ids": [evidence_id],
-                            }
-                        ],
-                        "key_gaps": ["竞品 SP 流量占比更高"],
-                    }
-                ],
-            }
-        ],
-    }
-
-
-def test_processor_writes_compact_profile_with_chinese_source_and_evidence():
-    processor = CompetitorDataProcessor(StubLLM(_profiles()))
-
-    profiles, error = processor.process(scope=_scope(), result=_result())
-
-    assert error is None
-    assert profiles is not None
-    assert profiles.profiles[0].competitor_asin == "B0COMP0001"
-    assert profiles.profiles[0].sections[0].source_names == ["流量结构"]
-    assert profiles.profiles[0].sections[0].facts[0].evidence_ids == ["competitor-evidence"]
-
-
 def test_processor_builds_parent_only_variant_module_from_verified_sif_fields():
     evidence = [
         {
@@ -138,7 +62,7 @@ def test_processor_builds_parent_only_variant_module_from_verified_sif_fields():
             "data": {"data": {"asins": [{"asin": "[B0COMP0002]", "total": 20, "naturalRatio": 0.6, "adRatio": 0.4, "spRatio": 0.3, "spRecRatio": 0.1, "brandRatio": 0.05, "vedioRatio": 0.02}]}},
         },
     ]
-    modules, error = CompetitorDataProcessor(StubLLM()).process_modules(scope=_scope(), result=_result(evidence))
+    modules, error = CompetitorDataProcessor().process_modules(scope=_scope(), result=_result(evidence))
 
     assert error is None
     assert modules is not None
@@ -153,6 +77,39 @@ def test_processor_builds_parent_only_variant_module_from_verified_sif_fields():
     assert modules.recommendation_placement.status == "unavailable"
 
 
+def test_processor_preserves_parent_and_ad_channel_scores_and_ratios():
+    distribution = {"asins": [{"asin": "[B0OWN00002]", "total": 1}]}
+    overview = {
+        "overview": {
+            "nf": {"score": 10295.753978, "ratio": 0.8288},
+            "ad": {"score": 2126.13967946, "ratio": 0.1712},
+        },
+        "ad": {
+            "sp": {"score": 1000.4, "ratio": 0.47},
+            "recommend": {"score": 500.5, "ratio": 0.24},
+            "sb": {"score": 400.6, "ratio": 0.19},
+            "sbv": {"score": 225.7, "ratio": 0.10},
+        },
+    }
+    evidence = [
+        {"evidence_id": "own-variants", "tool": "ops_get_listing_keyword_distribution", "query": {"asin": "B0OWN00001"}, "data": distribution},
+        {"evidence_id": "competitor-variants", "tool": "ops_get_listing_keyword_distribution", "query": {"asin": "B0COMP0001"}, "data": {"asins": [{"asin": "[B0COMP0002]", "total": 1}]}},
+        {"evidence_id": "own-overview", "tool": "ops_get_listing_traffic_overview", "query": {"asin": "B0OWN00001"}, "data": overview},
+        {"evidence_id": "competitor-overview", "tool": "ops_get_listing_traffic_overview", "query": {"asin": "B0COMP0001"}, "data": overview},
+    ]
+
+    modules, error = CompetitorDataProcessor().process_modules(scope=_scope(), result=_result(evidence))
+
+    assert error is None
+    assert modules is not None
+    own = modules.traffic_keyword_lookup.records[0]
+    assert own.listing_natural_traffic.score == pytest.approx(10295.753978)
+    assert own.listing_natural_traffic.ratio == pytest.approx(0.8288)
+    assert own.listing_ad_traffic.score == pytest.approx(2126.13967946)
+    assert own.advertising_traffic_distribution.sp_recommend.score == pytest.approx(500.5)
+    assert own.advertising_traffic_distribution.sbv.ratio == pytest.approx(0.10)
+
+
 def test_processor_keeps_only_keyword_traffic_share_strictly_above_one_percent():
     keyword_rows = [
         {"keyword": "below", "traffic_share": 0.0099, "natural_ratio": 0.5},
@@ -163,7 +120,7 @@ def test_processor_keeps_only_keyword_traffic_share_strictly_above_one_percent()
         {"evidence_id": "own-keywords", "tool": "market_get_asin_keyword_signals", "query": {"asin": "B0OWN00001"}, "data": {"top_keywords": keyword_rows}},
         {"evidence_id": "competitor-keywords", "tool": "market_get_asin_keyword_signals", "query": {"asin": "B0COMP0001"}, "data": {"top_keywords": keyword_rows}},
     ]
-    modules, error = CompetitorDataProcessor(StubLLM()).process_modules(scope=_scope(), result=_result(evidence))
+    modules, error = CompetitorDataProcessor().process_modules(scope=_scope(), result=_result(evidence))
 
     assert error is None
     assert modules is not None
@@ -221,7 +178,7 @@ def test_processor_calculates_multi_organic_extra_traffic_from_raw_child_scores(
         },
     ]
 
-    modules, error = CompetitorDataProcessor(StubLLM()).process_modules(scope=_scope(), result=_result(evidence))
+    modules, error = CompetitorDataProcessor().process_modules(scope=_scope(), result=_result(evidence))
 
     assert error is None
     assert modules is not None
@@ -244,38 +201,12 @@ def test_processor_does_not_calculate_multi_organic_share_from_incomplete_detail
         {"evidence_id": "competitor-detail", "tool": "ops_get_asin_traffic_trend_detail", "query": {"asin": "B0COMP0002"}, "data": {"total": 1, "details": [{"keyword": "complete", "score": 1}]}},
     ]
 
-    modules, _ = CompetitorDataProcessor(StubLLM()).process_modules(scope=_scope(), result=_result(evidence))
+    modules, _ = CompetitorDataProcessor().process_modules(scope=_scope(), result=_result(evidence))
 
     assert modules is not None
     assert modules.multi_variant_organic_position.status == "partial"
     assert not any(row.parent_asin == "B0OWN00001" for row in modules.multi_variant_organic_position.records)
     assert any("未覆盖完整关键词页" in reason for reason in modules.multi_variant_organic_position.missing_reasons)
-
-
-def test_processor_uses_expanded_profile_output_budget():
-    llm = CapturingLLM(_profiles())
-
-    profiles, error = CompetitorDataProcessor(llm).process(
-        scope=_scope(), result=_result()
-    )
-
-    assert error is None
-    assert profiles is not None
-    assert llm.max_tokens == COMPETITOR_PROFILE_MAX_TOKENS == 16_000
-
-
-def test_processor_keeps_every_evidence_item_without_sampling():
-    """There is no evidence cap: the only business filter is the >1% rule."""
-    evidence = [
-        {"evidence_id": f"evidence-{index}", "query": {"asin": "B0COMP0001"}, "data": {"value": index}}
-        for index in range(30)
-    ]
-
-    context, evidence_ids, _source_names, truncated_sources = build_processor_context(_scope(), _result(evidence))
-
-    assert len(evidence_ids) == 30
-    assert truncated_sources == set()
-    assert len(json.loads(context)["evidence"]) == 30
 
 
 def test_parent_incomplete_detail_page_does_not_block_multi_variant_module():
@@ -322,36 +253,13 @@ def test_parent_incomplete_detail_page_does_not_block_multi_variant_module():
         },
     ]
 
-    modules, error = CompetitorDataProcessor(StubLLM()).process_modules(scope=_scope(), result=_result(evidence))
+    modules, error = CompetitorDataProcessor().process_modules(scope=_scope(), result=_result(evidence))
 
     assert error is None
     module = modules.multi_variant_organic_position
     assert module.status == "available"
     own = next(row for row in module.records if row.parent_asin == "B0OWN00001")
     assert own.natural_traffic == 95  # 父体自己那页不参与变体分母
-
-
-def test_processor_retries_three_times_and_keeps_query_success_separate():
-    llm = StubLLM(error=RuntimeError("provider unavailable"))
-    processor = CompetitorDataProcessor(llm)
-
-    profiles, error = processor.process(scope=_scope(), result=_result())
-
-    assert profiles is None
-    assert llm.calls == 3
-    assert error == {"code": "COMPETITOR_PROCESSING_FAILED", "attempts": 3, "last_error": "RuntimeError"}
-
-
-def test_processor_rejects_unknown_evidence_and_private_metric_instead_of_writing_profile():
-    invalid = _profiles(evidence_id="invented-evidence")
-    invalid["profiles"][0]["sections"][0]["facts"][0]["field"] = "ACOS"
-    llm = StubLLM(invalid)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert profiles is None
-    assert llm.calls == 3
-    assert error and error["code"] == "COMPETITOR_PROCESSING_FAILED"
 
 
 class FakeInterpreter:
@@ -416,116 +324,3 @@ def test_graph_emits_data_processing_progress_for_competitor_profile():
         for item in events
         if item.event == StageEventType.STAGE_PROGRESS
     )
-
-
-# --- 私有指标：区分「断言」与「如实说明不可得」 ------------------------------
-
-def _profiles_with(*, key_gaps=(), limitations=(), section_limitations=(), facts=None):
-    payload = _profiles()
-    section = payload["profiles"][0]["sections"][0]
-    section["key_gaps"] = list(key_gaps)
-    section["limitations"] = list(section_limitations)
-    payload["profiles"][0]["limitations"] = list(limitations)
-    if facts is not None:
-        section["facts"] = facts
-    return payload
-
-
-def test_unavailability_notes_survive_validation():
-    """要求模型说明不可得，就不能把这句话判成违规。"""
-
-    payload = _profiles_with(
-        key_gaps=["竞品 ACOS 不可得", "竞品订单数据未返回"],
-        limitations=["竞品花费未披露，无法对比"],
-    )
-    llm = StubLLM(payload)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert error is None
-    assert llm.calls == 1
-    section = profiles.profiles[0].sections[0]
-    assert section.key_gaps == ["竞品 ACOS 不可得", "竞品订单数据未返回"]
-    assert profiles.profiles[0].limitations == ["竞品花费未披露，无法对比"]
-
-
-def test_asserted_private_metrics_are_dropped_from_every_text_field():
-    """断言式的私有指标不能留在任何字段里，包括之前漏检的 limitations。"""
-
-    payload = _profiles_with(
-        key_gaps=["竞品 ACOS 约 12%"],
-        limitations=["竞品 ROAS 为 3.1"],
-        section_limitations=["竞品花费约 2000 美元"],
-    )
-    llm = StubLLM(payload)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert error is None
-    assert llm.calls == 1
-    section = profiles.profiles[0].sections[0]
-    assert section.key_gaps == []
-    assert section.limitations == []
-    assert profiles.profiles[0].limitations == []
-    # 合规的事实仍然保留
-    assert [fact.field for fact in section.facts] == ["SP 流量占比"]
-
-
-def test_a_fact_asserting_a_private_metric_is_dropped_and_the_section_downgrades():
-    payload = _profiles_with(
-        facts=[
-            {
-                "field": "ACOS",
-                "own_value": 18.2,
-                "competitor_value": 31.6,
-                "unit": "%",
-                "comparison": "竞品 ACOS 更高",
-                "source_names": ["流量结构"],
-                "evidence_ids": ["competitor-evidence"],
-            }
-        ]
-    )
-    llm = StubLLM(payload)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert error is None
-    section = profiles.profiles[0].sections[0]
-    assert section.facts == []
-    # 没有可用事实时不能继续声称该主题 available
-    assert section.status == "unavailable"
-
-
-def test_fabricated_provenance_still_fails_hard():
-    """来源/证据造假属于完整性问题，必须整次失败而不是裁剪。"""
-
-    payload = _profiles(evidence_id="invented-evidence")
-    llm = StubLLM(payload)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert profiles is None
-    assert llm.calls == 3
-    assert error and error["code"] == "COMPETITOR_PROCESSING_FAILED"
-
-
-def test_an_unavailability_marker_does_not_excuse_a_stated_value():
-    """「不可得」不能成为同一句里给出估算值的通行证。"""
-
-    payload = _profiles_with(key_gaps=["竞品 ACOS 不可得，但估计约 12%"])
-    llm = StubLLM(payload)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert error is None
-    assert profiles.profiles[0].sections[0].key_gaps == []
-
-
-def test_naming_a_private_metric_without_a_value_is_still_not_a_gap():
-    payload = _profiles_with(key_gaps=["竞品 ACOS"])
-    llm = StubLLM(payload)
-
-    profiles, error = CompetitorDataProcessor(llm).process(scope=_scope(), result=_result())
-
-    assert error is None
-    assert profiles.profiles[0].sections[0].key_gaps == []

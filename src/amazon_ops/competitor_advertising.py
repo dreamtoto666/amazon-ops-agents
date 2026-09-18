@@ -9,7 +9,7 @@ from .competitor_research_catalog import CAPABILITY_BY_TOOL, OVERVIEW_TOOLS
 from .competitor_research_mcp_client import CompetitorResearchMCPClient
 from .competitor_router import CompetitorResearchRouter, validate_competitor_research_plan
 from .events import get_stage_reporter
-from .models import AgentTask, DataArtifact, Finding, QueryScope, SpecialistName, SpecialistResult
+from .models import AgentTask, DataArtifact, QueryScope, SpecialistName, SpecialistResult
 from .prompts import COMPETITOR_SPECIALIST_SYSTEM_PROMPT
 
 
@@ -239,7 +239,6 @@ class CompetitorAdvertisingSpecialist:
             agent=SpecialistName.COMPETITOR_ADVERTISING,
             status="degraded" if errors else "completed",
             summary=f"已完成竞品对标：{names}。结果仅基于 Sif 实际返回的公开可见研究数据。",
-            findings=[Finding(finding="竞品私有花费、竞价、ACOS、ROAS、订单和 CVR 未被推断。", severity="info", confidence=1.0, evidence_refs=[item.artifact_id for item in artifacts])],
             artifacts=artifacts,
             deliverables=[{"type": "competitor_research", "tools": [tool for tool, _ in results], "results": [result for _, result in results]}], errors=errors,
         )

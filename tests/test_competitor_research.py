@@ -94,7 +94,7 @@ def test_sales_operation_uses_only_sif_and_preserves_evidence():
     assert {call[0] for call in transport.calls} == {"sif"}
     assert {call[1] for call in transport.calls} == {"ops_get_asin_sales_list", "ops_get_asin_sales_trend"}
     assert result["evidence"] and result["evidence"][0]["evidence_id"].startswith("mcp-")
-    assert "ACOS" in result["limitations"][1]
+    assert "公开可见研究数据" in result["limitations"][0]
 
 
 def test_research_service_queries_every_confirmed_competitor():

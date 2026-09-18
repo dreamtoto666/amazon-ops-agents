@@ -143,51 +143,6 @@ class DataArtifact(BaseModel):
 
 
 ProcessedDataStatus = Literal["available", "partial", "unavailable"]
-CompetitorProfileSectionName = Literal[
-    "ad_architecture",
-    "traffic_structure",
-    "keyword_coverage",
-    "operations_history",
-    "campaign_detail",
-    "ad_group_detail",
-    "recommendation_traffic",
-]
-ProcessedScalar = str | int | float | bool | None
-
-
-class CompetitorProfileFact(BaseModel):
-    field: str = Field(min_length=1)
-    own_value: ProcessedScalar = None
-    competitor_value: ProcessedScalar = None
-    unit: str | None = None
-    comparison: str = Field(min_length=1)
-    source_names: list[str] = Field(min_length=1)
-    evidence_ids: list[str] = Field(min_length=1)
-
-
-class CompetitorProfileSection(BaseModel):
-    section: CompetitorProfileSectionName
-    status: ProcessedDataStatus
-    facts: list[CompetitorProfileFact] = Field(default_factory=list)
-    key_gaps: list[str] = Field(default_factory=list)
-    source_names: list[str] = Field(default_factory=list)
-    limitations: list[str] = Field(default_factory=list)
-
-
-class CompetitorProfile(BaseModel):
-    competitor_asin: str = Field(min_length=1)
-    status: ProcessedDataStatus
-    sections: list[CompetitorProfileSection] = Field(default_factory=list)
-    source_names: list[str] = Field(default_factory=list)
-    limitations: list[str] = Field(default_factory=list)
-
-
-class CompetitorProfiles(BaseModel):
-    own_asin: str = Field(min_length=1)
-    marketplace: str = Field(min_length=1)
-    profiles: list[CompetitorProfile] = Field(min_length=1)
-
-
 class CompetitorDataModule(BaseModel):
     """One evidence-bounded data module passed to the competitor report agent."""
 
@@ -212,12 +167,28 @@ class VariantTrafficRecord(BaseModel):
     sbv_ratio: float | None = None
 
 
+class TrafficScoreRatio(BaseModel):
+    """One Sif traffic channel's raw score and share."""
+
+    score: float | None = None
+    ratio: float | None = None
+
+
+class AdvertisingTrafficDistribution(BaseModel):
+    sp: TrafficScoreRatio = Field(default_factory=TrafficScoreRatio)
+    sp_recommend: TrafficScoreRatio = Field(default_factory=TrafficScoreRatio)
+    sb: TrafficScoreRatio = Field(default_factory=TrafficScoreRatio)
+    sbv: TrafficScoreRatio = Field(default_factory=TrafficScoreRatio)
+
+
 class TrafficKeywordLookupRecord(BaseModel):
     asin_role: AsinRole
     parent_asin: str = Field(min_length=1, max_length=32)
-    listing_natural_traffic: Any = None
-    listing_ad_traffic: Any = None
-    advertising_traffic_distribution: Any = None
+    listing_natural_traffic: TrafficScoreRatio = Field(default_factory=TrafficScoreRatio)
+    listing_ad_traffic: TrafficScoreRatio = Field(default_factory=TrafficScoreRatio)
+    advertising_traffic_distribution: AdvertisingTrafficDistribution = Field(
+        default_factory=AdvertisingTrafficDistribution
+    )
     variants: list[VariantTrafficRecord] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
 

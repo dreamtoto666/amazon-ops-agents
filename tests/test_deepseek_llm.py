@@ -18,7 +18,7 @@ from amazon_ops.interfaces import DeepSeekCompetitorReportWriter
 from amazon_ops.listing import DeepSeekListingCopywriter, ListingDraft
 from amazon_ops.llm import MAX_COMPLETION_TOKENS
 from amazon_ops.models import (
-    CompetitorAdvertisingReport,
+    CompetitorReportSection,
     FinalResponse,
     UnderstandRequestResult,
 )
@@ -39,11 +39,11 @@ def test_competitor_report_writer_uses_maximum_completion_budget():
 
         def complete(self, *, max_tokens=None, **_kwargs):
             self.max_tokens = max_tokens
-            return CompetitorAdvertisingReport(title="报告")
+            return CompetitorReportSection(key="traffic_keyword_lookup", status="available", content="报告")
 
     llm = RecordingLLM()
 
-    DeepSeekCompetitorReportWriter(llm).invoke({})
+    DeepSeekCompetitorReportWriter(llm).invoke_section({}, "traffic_keyword_lookup")
 
     assert llm.max_tokens == MAX_COMPLETION_TOKENS
 

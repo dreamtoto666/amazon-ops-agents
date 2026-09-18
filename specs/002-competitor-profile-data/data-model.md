@@ -16,6 +16,7 @@
 
 ## 模块记录
 
+- **查流量词父 ASIN 记录**：`listing_natural_traffic`、`listing_ad_traffic` 均为 `{score, ratio}`；`advertising_traffic_distribution` 包含 `sp`、`sp_recommend`、`sb`、`sbv`，每项均为 `{score, ratio}`。
 - **变体流量记录**：`parent_asin`、`variant_asin`、变体属性、`total_traffic_ratio`、`natural_traffic_ratio`、`ad_traffic_ratio`、`sp_ratio`、`sp_recommend_ratio`、`sb_ratio`、`sbv_ratio`、`period`、`evidence_ids`。
 - **反查流量词记录**：`asin_role`、`keyword`、`total_traffic_ratio`、`natural_traffic_ratio`、`ad_traffic_ratio`、自有记录可选 `growth_period_change`、`evidence_ids`。处理器仅对 `total_traffic_ratio > 1%` 保留记录。
 - **多自然位记录**：`asin_role`、`keyword`、`natural_traffic`、`natural_traffic_ratio`、`multi_organic_extra_natural_traffic`、`evidence_ids`。处理器仅对 `natural_traffic_ratio > 1%` 保留记录。
